@@ -186,6 +186,7 @@ services:
       PYTHONDONTWRITEBYTECODE: "1"
       PROMETHEUS_URL: http://prometheus:9090
       ALERTMANAGER_URL: http://alertmanager:9093
+      BLACKBOX_URL: http://blackbox:9115
       PANEL_USER: ${PANEL_USER:-admin}
       PANEL_PASSWORD: ${PANEL_PASSWORD:?set PANEL_PASSWORD in .env}
       PANEL_LISTEN_PORT: "8080"
@@ -209,7 +210,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-    depends_on: [prometheus, alertmanager]
+    depends_on: [prometheus, alertmanager, blackbox]
     networks: [monitoring]
 
 volumes:
@@ -268,7 +269,7 @@ __MONITORING_EOF__
 **مانیتورها:** نمای کلی، کانتینرها، سایت‌ها، دیسک‌ها، شبکه، تارگت‌ها، هشدارها.
 
 **مدیریت (همه از پنل):**
-- **سایت‌ها:** افزودن/حذف سایت (HTTP/HTTPS) و پورت TCP برای چک آپتایم، زمان پاسخ و انقضای SSL.
+- **سایت‌ها:** افزودن/حذف سایت (HTTP/HTTPS) و پورت TCP برای چک آپتایم، زمان پاسخ و انقضای SSL. دکمه‌ی ذره‌بین کنار هر ردیف چک را همان لحظه اجرا می‌کند و **دلیل ناموفق بودن** را به زبان ساده می‌گوید (قطع شدن handshake توسط سایت، پورت بسته، DNS، timeout، مشکل گواهی، کد خطای HTTP).
 - **سرورها:** افزودن/حذف سرورهای دیگر (با `node_exporter`)؛ دستور نصب روی سرور مقصد را همان‌جا می‌دهد.
 - **کانتینرها:** شروع، توقف، ری‌استارت، دیدن لاگ، حذف و **ساخت کانتینر جدید** (ایمیج، پورت، متغیر محیطی، ولیوم، سیاست ری‌استارت).
 - **اعلان‌ها:** اتصال ربات تلگرام (با دکمه‌ی «پیدا کردن Chat ID»)، پیام آزمایشی و هشدار آزمایشی.
@@ -611,6 +612,10 @@ def post_checks_remove(b, _h):
     return {"ok": True}
 
 
+def post_checks_probe(b, _h):
+    return store.probe_debug(b.get("kind"), b.get("target"))
+
+
 def post_telegram_save(b, _h):
     return {"ok": True, **store.save_telegram(b.get("token", ""), b.get("chat_id", ""))}
 
@@ -660,7 +665,7 @@ def post_password(b, h):
 
 
 POST_API = {
-    "/api/checks/add": post_checks_add, "/api/checks/remove": post_checks_remove,
+    "/api/checks/add": post_checks_add, "/api/checks/remove": post_checks_remove, "/api/checks/probe": post_checks_probe,
     "/api/telegram/save": post_telegram_save, "/api/telegram/test": post_telegram_test,
     "/api/telegram/chats": post_telegram_chats, "/api/telegram/remove": post_telegram_remove,
     "/api/alerts/test": post_alert_test, "/api/rules/set": post_rules_set, "/api/rules/reset": post_rules_reset,
@@ -835,6 +840,7 @@ DATA = Path(os.environ.get("DATA_DIR", "/data"))
 PROM_URL = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090").rstrip("/")
 AM_URL = os.environ.get("ALERTMANAGER_URL", "http://alertmanager:9093").rstrip("/")
 TELEGRAM_API = os.environ.get("TELEGRAM_API", "https://api.telegram.org").rstrip("/")
+BLACKBOX_URL = os.environ.get("BLACKBOX_URL", "http://blackbox:9115").rstrip("/")
 LOCAL_NODE = "node-exporter:9100"
 LOCK = threading.RLock()
 
@@ -983,6 +989,54 @@ def remove_target(kind, target):
         if sum(len(g["targets"]) for g in kept) == sum(len(g["targets"]) for g in groups):
             raise ConfigError("Not found")
         _write_groups(kind, kept)
+
+
+def probe_debug(kind, target):
+    """Run one check right now through the blackbox exporter and return why it passed or failed."""
+    if kind not in ("http", "tcp"):
+        raise ConfigError("unknown kind")
+    target = str(target or "").strip()
+    if not any(r["target"] == target for r in list_targets(kind)):
+        raise ConfigError("Only monitored addresses can be tested")
+    query = urlencode({"module": "http_2xx" if kind == "http" else "tcp_connect", "target": target, "debug": "true"})
+    try:
+        with urlopen(f"{BLACKBOX_URL}/probe?{query}", timeout=25) as resp:
+            text = resp.read(200_000).decode("utf-8", "replace")
+    except HTTPError as e:
+        text = e.read(200_000).decode("utf-8", "replace")
+    except (URLError, OSError) as e:
+        raise ApplyError(f"The blackbox checker is not reachable: {getattr(e, 'reason', e)}") from e
+    ok = re.search(r"^probe_success\s+1\b", text, re.M) is not None
+    status = re.search(r"^probe_http_status_code\s+(\d+)", text, re.M)
+    http_status = int(status.group(1)) if status and int(status.group(1)) else None
+    reason = ""
+    for line in text.splitlines():                          # the first error carrying err="..." is the real cause
+        m = re.search(r'level=error.*?err="((?:[^"\\]|\\.)*)"', line)
+        if m:
+            reason = m.group(1).replace('\\"', '"')
+            break
+    return {"ok": ok, "reason": reason, "kind": "" if ok else classify_failure(reason, http_status), "http_status": http_status,
+            "log": "\n".join(l for l in text.splitlines() if not l.startswith("#"))[-20000:]}
+
+
+def classify_failure(reason, http_status):
+    """Map a blackbox error to a short code the UI turns into a plain-language explanation."""
+    r = reason.lower()
+    if "connection reset" in r or "unexpected eof" in r or "eof" in r.split(":")[-1]:
+        return "reset"
+    if "connection refused" in r:
+        return "refused"
+    if "no such host" in r or "server misbehaving" in r or "lookup" in r:
+        return "dns"
+    if "timeout" in r or "deadline exceeded" in r:
+        return "timeout"
+    if "x509" in r or "certificate" in r or "tls:" in r:
+        return "tls"
+    if "network is unreachable" in r or "no route" in r:
+        return "unreachable"
+    if http_status and not reason:
+        return "status"
+    return "status" if http_status else "other"
 
 
 def _legacy_items(text):
@@ -2150,6 +2204,17 @@ __MONITORING_EOF__
       // websites + servers
       add_site: "Add website or port", type_http: "Website (HTTP / HTTPS)", type_tcp: "TCP port", f_target: "Address", f_name_opt: "Name (optional)",
       hint_http: "A full address, for example https://example.com", hint_tcp: "host:port, for example 203.0.113.10:22 (SSH) or db.internal:5432",
+      probe: "Test now / why?", probe_title: "Check result", probe_running: "Checking now…", probe_ok: "This check passes from the server right now.",
+      probe_fail: "This check fails from the server.", probe_reason: "Reason", probe_log: "Technical details", probe_status: "HTTP status",
+      probe_k_reset: "The site (or the network in front of it) accepted the connection and then cut it off during the handshake. This is what a firewall or geo-block does: the site works for you but refuses this server's IP address.",
+      probe_k_refused: "The server answered but nothing is listening on that port (or a firewall is actively rejecting it).",
+      probe_k_dns: "The server cannot resolve this domain name. Check the spelling and the DNS settings of the server.",
+      probe_k_timeout: "No answer in time. The host is down, or a firewall silently drops packets from this server.",
+      probe_k_tls: "The TLS certificate has a problem: expired, wrong domain or an untrusted issuer.",
+      probe_k_unreachable: "This server has no network route to the address.",
+      probe_k_status: "The site answered but with an error status (4xx or 5xx), so it is not counted as healthy.",
+      probe_k_other: "The check failed for another reason; see the technical details below.",
+      probe_hint: "If the address opens in your browser but fails here, the server's IP is probably blocked by the site or its network (common for sites hosted in Iran when the monitoring server is abroad), or the server has no route to it. Monitoring shows what the server sees, not what you see.",
       s_wait: "Waiting", w_confirm_remove: "Stop monitoring {n}?", w_hint: "New entries show \"Waiting\" until the first check completes (about a minute).",
       add_server: "Add server", f_srv_addr: "Server address", f_srv_hint: "IP or hostname with the node_exporter port, for example 203.0.113.10:9100",
       srv_local: "this server", srv_confirm_remove: "Stop monitoring server {n}?",
@@ -2239,6 +2304,17 @@ __MONITORING_EOF__
       pulling_hint: "در حال ساخت… دانلود ایمیج جدید ممکن است چند دقیقه طول بکشد.",
       add_site: "افزودن سایت یا پورت", type_http: "سایت (HTTP / HTTPS)", type_tcp: "پورت TCP", f_target: "آدرس", f_name_opt: "نام (اختیاری)",
       hint_http: "آدرس کامل، مثلاً https://example.com", hint_tcp: "host:port مثل 203.0.113.10:22 (SSH) یا db.internal:5432",
+      probe: "آزمایش الان / چرا؟", probe_title: "نتیجه‌ی چک", probe_running: "در حال چک کردن…", probe_ok: "این چک همین الان از سرور موفق است.",
+      probe_fail: "این چک از سرور ناموفق است.", probe_reason: "دلیل", probe_log: "جزئیات فنی", probe_status: "کد HTTP",
+      probe_k_reset: "سایت (یا شبکه‌ی جلوی آن) اتصال را پذیرفت و وسط handshake قطعش کرد. این رفتار فایروال یا مسدودسازی جغرافیایی است: سایت برای شما باز می‌شود ولی IP این سرور را رد می‌کند.",
+      probe_k_refused: "سرور پاسخ داد ولی روی آن پورت چیزی گوش نمی‌دهد (یا فایروال فعالانه رد می‌کند).",
+      probe_k_dns: "سرور نمی‌تواند این نام دامنه را پیدا کند. املا و تنظیمات DNS سرور را بررسی کنید.",
+      probe_k_timeout: "در زمان مقرر پاسخی نیامد. میزبان خاموش است یا فایروال بی‌صدا بسته‌های این سرور را دور می‌اندازد.",
+      probe_k_tls: "گواهی TLS مشکل دارد: منقضی‌شده، برای دامنه‌ی دیگر یا از مرجع نامعتبر.",
+      probe_k_unreachable: "این سرور مسیر شبکه‌ای به این آدرس ندارد.",
+      probe_k_status: "سایت پاسخ داد ولی با کد خطا (4xx یا 5xx)، پس سالم حساب نمی‌شود.",
+      probe_k_other: "چک به دلیل دیگری ناموفق بود؛ جزئیات فنی پایین را ببینید.",
+      probe_hint: "اگر آدرس در مرورگر شما باز می‌شود ولی اینجا ناموفق است، احتمالاً IP سرور توسط سایت یا شبکه‌اش مسدود است (برای سایت‌های میزبانی‌شده در ایران وقتی سرور مانیتورینگ خارج از ایران است رایج است) یا سرور مسیری به آن ندارد. مانیتورینگ همان چیزی را نشان می‌دهد که «سرور» می‌بیند، نه آنچه شما می‌بینید.",
       s_wait: "در انتظار", w_confirm_remove: "نظارت بر {n} متوقف شود؟", w_hint: "موارد جدید تا تکمیل اولین چک (حدود یک دقیقه) «در انتظار» نشان داده می‌شوند.",
       add_server: "افزودن سرور", f_srv_addr: "آدرس سرور", f_srv_hint: "آی‌پی یا نام سرور همراه پورت node_exporter، مثل 203.0.113.10:9100",
       srv_local: "همین سرور", srv_confirm_remove: "نظارت بر سرور {n} متوقف شود؟",
@@ -2617,13 +2693,15 @@ __MONITORING_EOF__
           { h: "response", cell: (r) => num(r.m ? fmtMs(r.m.duration) : "–") },
           { h: "http", cell: (r) => num(r.m && r.m.http ? r.m.http : "–") },
           { h: "ssl_h", cell: (r) => (!r.m || r.m.ssl_days == null ? "–" : pill(r.m.ssl_days < 7 ? "bad" : r.m.ssl_days < 14 ? "warn" : "ok", nf(r.m.ssl_days, 0), false)) },
-          { h: "actions", cell: (r) => (r.fixed ? "–" : `<div class="row-actions">${btnIcon("trash", t("remove"), `data-act="del" data-kind="${r.kind}" data-target="${esc(r.target)}"`, "danger")}</div>`) },
+          { h: "actions", cell: (r) => `<div class="row-actions">${btnIcon("search", t("probe"), `data-act="probe" data-kind="${r.kind}" data-target="${esc(r.target)}"`)}${r.fixed ? "" : btnIcon("trash", t("remove"), `data-act="del" data-kind="${r.kind}" data-target="${esc(r.target)}"`, "danger")}</div>` },
         ];
         return { html: table(cols, rows) + `<p class="muted" style="margin-top:12px">${esc(t("w_hint"))}</p>`, tools: addButton("btn-add-site", t("add_site")) };
       },
       bind(root) {
         $("btn-add-site")?.addEventListener("click", addSiteDialog);
         root.addEventListener("click", async (e) => {
+          const pb = e.target.closest('[data-act="probe"]');
+          if (pb) return probeDialog(pb.dataset.kind, pb.dataset.target);
           const b = e.target.closest('[data-act="del"]');
           if (!b) return;
           if (!(await confirmBox({ message: t("w_confirm_remove", { n: b.dataset.target }), label: t("remove") }))) return;
@@ -2869,6 +2947,25 @@ __MONITORING_EOF__
         dlg.querySelector("#log-refresh").addEventListener("click", load);
         dlg.querySelector("#log-tail").addEventListener("change", load);
         load();
+      },
+    });
+  }
+
+  function probeDialog(kind, target) {
+    openDialog({
+      title: `${t("probe_title")}: ${target}`, wide: true, hideSubmit: true, cancel: t("close"),
+      body: `<div id="probe-out"><div class="skeleton" style="height:70px"></div><p class="muted">${esc(t("probe_running"))}</p></div>`,
+      onOpen: async (dlg) => {
+        const out = dlg.querySelector("#probe-out");
+        try {
+          const r = await post("/api/checks/probe", { kind, target });
+          const status = r.http_status ? ` · ${esc(t("probe_status"))}: ${num(r.http_status)}` : "";
+          out.innerHTML = `<div class="notice ${r.ok ? "ok" : "bad"}">${icon(r.ok ? "okmark" : "bell")}<span><b>${esc(t(r.ok ? "probe_ok" : "probe_fail"))}</b>${status}</span></div>
+            ${r.ok ? "" : `<p>${esc(t("probe_k_" + (r.kind || "other")))}</p>`}
+            ${r.reason ? `<p><b>${esc(t("probe_reason"))}:</b> <code>${esc(r.reason)}</code></p>` : ""}
+            ${r.ok ? "" : `<p class="muted">${esc(t("probe_hint"))}</p>`}
+            <details><summary>${esc(t("probe_log"))}</summary><pre class="logs" style="height:280px;margin-top:10px">${esc(r.log)}</pre></details>`;
+        } catch (e) { out.innerHTML = `<div class="notice bad">${icon("bell")}<span>${esc(e.message)}</span></div>`; }
       },
     });
   }

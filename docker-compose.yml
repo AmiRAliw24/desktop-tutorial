@@ -108,6 +108,7 @@ services:
       PYTHONDONTWRITEBYTECODE: "1"
       PROMETHEUS_URL: http://prometheus:9090
       ALERTMANAGER_URL: http://alertmanager:9093
+      BLACKBOX_URL: http://blackbox:9115
       PANEL_USER: ${PANEL_USER:-admin}
       PANEL_PASSWORD: ${PANEL_PASSWORD:?set PANEL_PASSWORD in .env}
       PANEL_LISTEN_PORT: "8080"
@@ -131,7 +132,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-    depends_on: [prometheus, alertmanager]
+    depends_on: [prometheus, alertmanager, blackbox]
     networks: [monitoring]
 
 volumes:

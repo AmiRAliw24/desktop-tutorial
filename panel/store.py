@@ -22,6 +22,7 @@ DATA = Path(os.environ.get("DATA_DIR", "/data"))
 PROM_URL = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090").rstrip("/")
 AM_URL = os.environ.get("ALERTMANAGER_URL", "http://alertmanager:9093").rstrip("/")
 TELEGRAM_API = os.environ.get("TELEGRAM_API", "https://api.telegram.org").rstrip("/")
+BLACKBOX_URL = os.environ.get("BLACKBOX_URL", "http://blackbox:9115").rstrip("/")
 LOCAL_NODE = "node-exporter:9100"
 LOCK = threading.RLock()
 
@@ -170,6 +171,54 @@ def remove_target(kind, target):
         if sum(len(g["targets"]) for g in kept) == sum(len(g["targets"]) for g in groups):
             raise ConfigError("Not found")
         _write_groups(kind, kept)
+
+
+def probe_debug(kind, target):
+    """Run one check right now through the blackbox exporter and return why it passed or failed."""
+    if kind not in ("http", "tcp"):
+        raise ConfigError("unknown kind")
+    target = str(target or "").strip()
+    if not any(r["target"] == target for r in list_targets(kind)):
+        raise ConfigError("Only monitored addresses can be tested")
+    query = urlencode({"module": "http_2xx" if kind == "http" else "tcp_connect", "target": target, "debug": "true"})
+    try:
+        with urlopen(f"{BLACKBOX_URL}/probe?{query}", timeout=25) as resp:
+            text = resp.read(200_000).decode("utf-8", "replace")
+    except HTTPError as e:
+        text = e.read(200_000).decode("utf-8", "replace")
+    except (URLError, OSError) as e:
+        raise ApplyError(f"The blackbox checker is not reachable: {getattr(e, 'reason', e)}") from e
+    ok = re.search(r"^probe_success\s+1\b", text, re.M) is not None
+    status = re.search(r"^probe_http_status_code\s+(\d+)", text, re.M)
+    http_status = int(status.group(1)) if status and int(status.group(1)) else None
+    reason = ""
+    for line in text.splitlines():                          # the first error carrying err="..." is the real cause
+        m = re.search(r'level=error.*?err="((?:[^"\\]|\\.)*)"', line)
+        if m:
+            reason = m.group(1).replace('\\"', '"')
+            break
+    return {"ok": ok, "reason": reason, "kind": "" if ok else classify_failure(reason, http_status), "http_status": http_status,
+            "log": "\n".join(l for l in text.splitlines() if not l.startswith("#"))[-20000:]}
+
+
+def classify_failure(reason, http_status):
+    """Map a blackbox error to a short code the UI turns into a plain-language explanation."""
+    r = reason.lower()
+    if "connection reset" in r or "unexpected eof" in r or "eof" in r.split(":")[-1]:
+        return "reset"
+    if "connection refused" in r:
+        return "refused"
+    if "no such host" in r or "server misbehaving" in r or "lookup" in r:
+        return "dns"
+    if "timeout" in r or "deadline exceeded" in r:
+        return "timeout"
+    if "x509" in r or "certificate" in r or "tls:" in r:
+        return "tls"
+    if "network is unreachable" in r or "no route" in r:
+        return "unreachable"
+    if http_status and not reason:
+        return "status"
+    return "status" if http_status else "other"
 
 
 def _legacy_items(text):

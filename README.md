@@ -11,6 +11,22 @@
 | **cAdvisor** | متریک کانتینرهای Docker |
 | **Blackbox exporter** | چک آپتایم سایت‌ها، پورت‌ها و انقضای SSL |
 
+## نصب یک‌خطی
+
+روی سرور (به‌عنوان root یا با sudo):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/main/install.sh | sudo bash
+```
+
+بدون سؤال، با متغیرهای محیطی (به `-E` یا `env` دقت کنید تا متغیرها به sudo برسند):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/main/install.sh | sudo env GRAFANA_ADMIN_PASSWORD='...' SITES='https://a.com' bash -s -- -y
+```
+
+این آدرس فقط وقتی کار می‌کند که ریپو public باشد و `install.sh` روی برنچ `main` قرار گرفته باشد. اگر ریپو private است، فایل را با `scp` کپی کنید (روش بعدی).
+
 ## نصب روی سرور لینوکسی (تک‌فایل)
 
 فقط فایل `install.sh` را روی سرور کپی کنید (مثلاً `scp install.sh root@SERVER:`) و اجرا کنید:

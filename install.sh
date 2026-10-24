@@ -4,6 +4,8 @@
 # node_exporter + cAdvisor + Blackbox exporter under /opt/server-monitoring.
 #
 # Usage (as root):
+#   curl -fsSL <URL>/install.sh | sudo bash          # one-liner, interactive
+#   curl -fsSL <URL>/install.sh | sudo bash -s -- -y # one-liner, no questions (uses env vars)
 #   bash install.sh                 # interactive
 #   bash install.sh -y              # non-interactive, uses env vars / defaults
 #   bash install.sh --no-start      # write files only, don't start containers
@@ -14,6 +16,10 @@
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SITES (comma-separated URLs), PROMETHEUS_RETENTION
 set -euo pipefail
 
+# Everything lives in main() so bash parses the whole script before running anything.
+# This keeps `curl ... | bash` safe: no command can swallow the rest of the script from stdin.
+main() {
+
 INSTALL_DIR=${INSTALL_DIR:-/opt/server-monitoring}
 ASSUME_YES=0; NO_START=0; ACTION=install
 for arg in "$@"; do
@@ -22,7 +28,7 @@ for arg in "$@"; do
     --no-start) NO_START=1 ;;
     --uninstall) ACTION=uninstall ;;
     --purge) ACTION=purge ;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,19p' "$0" 2>/dev/null || echo 'See the header of install.sh for usage.'; exit 0 ;;
     *) echo "Unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -35,7 +41,7 @@ die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 ask() {
   local var=$1 prompt=$2 default=${3:-} reply
   if [ -n "${!var:-}" ]; then return; fi
-  if [ "$ASSUME_YES" = 1 ] || [ ! -r /dev/tty ]; then printf -v "$var" '%s' "$default"; return; fi
+  if [ "$ASSUME_YES" = 1 ] || ! { : < /dev/tty; } 2>/dev/null; then printf -v "$var" '%s' "$default"; return; fi
   read -r -p "$prompt${default:+ [$default]}: " reply < /dev/tty || true
   printf -v "$var" '%s' "${reply:-$default}"
 }
@@ -189,6 +195,22 @@ __MONITORING_EOF__
 | **node_exporter** | متریک‌های سیستم: CPU، رم، دیسک، شبکه، load |
 | **cAdvisor** | متریک کانتینرهای Docker |
 | **Blackbox exporter** | چک آپتایم سایت‌ها، پورت‌ها و انقضای SSL |
+
+## نصب یک‌خطی
+
+روی سرور (به‌عنوان root یا با sudo):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/main/install.sh | sudo bash
+```
+
+بدون سؤال، با متغیرهای محیطی (به `-E` یا `env` دقت کنید تا متغیرها به sudo برسند):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/main/install.sh | sudo env GRAFANA_ADMIN_PASSWORD='...' SITES='https://a.com' bash -s -- -y
+```
+
+این آدرس فقط وقتی کار می‌کند که ریپو public باشد و `install.sh` روی برنچ `main` قرار گرفته باشد. اگر ریپو private است، فایل را با `scp` کپی کنید (روش بعدی).
 
 ## نصب روی سرور لینوکسی (تک‌فایل)
 
@@ -1283,8 +1305,8 @@ fi
 
 ensure_docker
 log "Pulling images and starting the stack"
-compose pull --quiet
-compose up -d --remove-orphans
+compose pull --quiet < /dev/null
+compose up -d --remove-orphans < /dev/null
 
 log "Waiting for Grafana to become healthy"
 healthy=0
@@ -1310,3 +1332,6 @@ echo "  Websites: edit $INSTALL_DIR/prometheus/targets/http.yml (no restart need
 echo "  Manage:   docker compose --project-directory $INSTALL_DIR ps | logs | restart"
 [ -z "${TELEGRAM_BOT_TOKEN:-}" ] && echo "  Alerts:   Telegram not configured - fill TELEGRAM_* in $INSTALL_DIR/.env, then run $INSTALL_DIR/scripts/render-config.sh && docker compose --project-directory $INSTALL_DIR restart alertmanager"
 exit 0
+}
+
+main "$@"

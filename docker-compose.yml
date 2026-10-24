@@ -63,6 +63,32 @@ services:
       - ./blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
     networks: [monitoring]
 
+  panel:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    command: ["python", "-u", "/app/server.py"]
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PROMETHEUS_URL: http://prometheus:9090
+      PANEL_USER: ${GRAFANA_ADMIN_USER:-admin}
+      PANEL_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      PANEL_LISTEN_PORT: "8080"
+    volumes:
+      - ./panel:/app:ro
+    ports:
+      - "${PANEL_BIND:-0.0.0.0}:${PANEL_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on: [prometheus]
+    networks: [monitoring]
+
   grafana:
     image: grafana/grafana:11.3.0
     restart: unless-stopped

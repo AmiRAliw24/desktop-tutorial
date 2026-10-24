@@ -12,7 +12,7 @@
 #   bash install.sh --uninstall     # stop and remove containers (keeps data volumes)
 #   bash install.sh --purge         # also delete data volumes and the install dir
 #
-# Optional env vars: INSTALL_DIR, GRAFANA_ADMIN_USER, GRAFANA_ADMIN_PASSWORD, GRAFANA_BIND,
+# Optional env vars: INSTALL_DIR, GRAFANA_ADMIN_USER, GRAFANA_ADMIN_PASSWORD, GRAFANA_BIND, PANEL_PORT,
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SITES (comma-separated URLs), PROMETHEUS_RETENTION
 set -euo pipefail
 
@@ -101,7 +101,7 @@ if [ "$FRESH" = 1 ]; then
     GRAFANA_ADMIN_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
     GENERATED_PW=1
   fi
-  ask GRAFANA_BIND "Grafana listen address (0.0.0.0 = reachable from any network, 127.0.0.1 = local only)" 0.0.0.0
+  ask GRAFANA_BIND "Panel and Grafana listen address (0.0.0.0 = reachable from any network, 127.0.0.1 = local only)" 0.0.0.0
   ask TELEGRAM_BOT_TOKEN "Telegram bot token for alerts (empty = skip)" ""
   TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
   [ -n "$TELEGRAM_BOT_TOKEN" ] && ask TELEGRAM_CHAT_ID "Telegram chat id" ""
@@ -116,14 +116,17 @@ extract_files
 if [ "$FRESH" = 1 ]; then
   # Values are single-quoted: .env is read by both bash and Docker Compose, and single quotes
   # keep characters like $ and spaces literal in both.
-  for v in GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD GRAFANA_BIND TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID SITES; do
+  for v in GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD GRAFANA_BIND PANEL_PORT TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID SITES; do
     case "${!v:-}" in *\'*|*$'\n'*) die "$v must not contain single quotes or newlines." ;; esac
   done
+  [[ ${PANEL_PORT:-8080} =~ ^[0-9]{2,5}$ ]] || die "PANEL_PORT must be a number."
   umask 077
   cat > "$INSTALL_DIR/.env" <<ENV
 GRAFANA_ADMIN_USER='$GRAFANA_ADMIN_USER'
 GRAFANA_ADMIN_PASSWORD='$GRAFANA_ADMIN_PASSWORD'
 GRAFANA_BIND='$GRAFANA_BIND'
+PANEL_BIND='$GRAFANA_BIND'
+PANEL_PORT='${PANEL_PORT:-8080}'
 PROMETHEUS_RETENTION='${PROMETHEUS_RETENTION:-30d}'
 TELEGRAM_BOT_TOKEN='${TELEGRAM_BOT_TOKEN:-}'
 TELEGRAM_CHAT_ID='${TELEGRAM_CHAT_ID:-}'
@@ -165,13 +168,17 @@ set -a; . "$INSTALL_DIR/.env"; set +a
 ip=$(hostname -I 2>/dev/null | awk '{print $1}'); ip=${ip:-<server-ip>}
 echo
 log "Done."
+PANEL_PORT=${PANEL_PORT:-8080}
 if [ "$GRAFANA_BIND" = 127.0.0.1 ]; then
-  echo "  Grafana is local-only. From your computer run:  ssh -L 3000:127.0.0.1:3000 root@$ip"
-  echo "  then open http://localhost:3000"
+  echo "  Services are local-only. From your computer run:"
+  echo "    ssh -L $PANEL_PORT:127.0.0.1:$PANEL_PORT -L 3000:127.0.0.1:3000 root@$ip"
+  echo "  then open http://localhost:$PANEL_PORT (panel) and http://localhost:3000 (Grafana)"
 else
-  echo "  Grafana:  http://$ip:3000   (open port 3000 in your firewall; put HTTPS in front for production)"
+  echo "  Panel:    http://$ip:$PANEL_PORT"
+  echo "  Grafana:  http://$ip:3000"
+  echo "  (open TCP ports $PANEL_PORT and 3000 in your firewall; put HTTPS in front for production)"
 fi
-echo "  Login:    $GRAFANA_ADMIN_USER / ${GENERATED_PW:+$GRAFANA_ADMIN_PASSWORD}${GENERATED_PW:-(the password you chose)}"
+echo "  Login:    $GRAFANA_ADMIN_USER / ${GENERATED_PW:+$GRAFANA_ADMIN_PASSWORD}${GENERATED_PW:-(the password you chose)}   (same for panel and Grafana)"
 [ -n "${GENERATED_PW:-}" ] && echo "  (saved in $INSTALL_DIR/.env)"
 echo "  Websites: edit $INSTALL_DIR/prometheus/targets/http.yml (no restart needed)"
 echo "  Manage:   docker compose --project-directory $INSTALL_DIR ps | logs | restart"

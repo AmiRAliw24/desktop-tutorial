@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in - Server Monitor</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/login.js" defer></script>
+</head>
+<body>
+  <div class="login-page">
+    <form class="card login-card" id="form" autocomplete="on">
+      <div class="brand">
+        <div class="logo">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.6-3.2 7.9-8 9.8C7.2 19.9 4 16.6 4 12V6l8-3z"/><path d="M8 12h2.5l1.5-3 2 6 1.5-3H17"/></svg>
+        </div>
+        <div>
+          <h1 data-i18n="title">Server Monitor</h1>
+          <small data-i18n="signin_sub">Sign in to continue</small>
+        </div>
+      </div>
+      <div class="field">
+        <label for="user" data-i18n="user">Username</label>
+        <input id="user" name="username" autocomplete="username" required autofocus>
+      </div>
+      <div class="field">
+        <label for="password" data-i18n="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <div class="form-error" id="error" role="alert"></div>
+      <button class="btn primary" type="submit" id="submit" data-i18n="signin">Sign in</button>
+    </form>
+  </div>
+</body>
+</html>

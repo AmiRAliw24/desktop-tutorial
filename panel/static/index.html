@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Server Monitor</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="card topbar">
+      <div class="brand">
+        <div class="logo" id="logo"></div>
+        <div>
+          <h1 data-i18n="title">Server Monitor</h1>
+          <small id="hostline">&nbsp;</small>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn icon" id="theme" type="button" aria-label="Theme"></button>
+        <button class="btn" id="lang" type="button"></button>
+        <button class="btn" id="refresh" type="button"></button>
+        <a class="btn primary" id="grafana" href="#" target="_blank" rel="noopener"></a>
+        <button class="btn danger" id="logout" type="button"></button>
+      </div>
+    </header>
+
+    <div id="banner"></div>
+    <section class="stats" id="stats" aria-live="polite"></section>
+
+    <div class="layout">
+      <aside class="card side">
+        <h2 data-i18n="monitors">Monitors</h2>
+        <nav class="nav" id="nav"></nav>
+      </aside>
+      <main class="card panel" id="panel"></main>
+    </div>
+    <div class="foot" id="foot"></div>
+  </div>
+</body>
+</html>

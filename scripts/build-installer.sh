@@ -18,6 +18,13 @@ FILES=(
   grafana/provisioning/dashboards/dashboards.yml:644
   grafana/dashboards/server-overview.json:644
   scripts/render-config.sh:755
+  panel/server.py:644
+  panel/static/index.html:644
+  panel/static/login.html:644
+  panel/static/app.js:644
+  panel/static/login.js:644
+  panel/static/style.css:644
+  panel/static/favicon.svg:644
 )
 # Targets are only written on first install so user edits survive re-runs.
 FIRST_ONLY=(prometheus/targets/http.yml:644 prometheus/targets/tcp.yml:644)

@@ -101,7 +101,7 @@ if [ "$FRESH" = 1 ]; then
     GRAFANA_ADMIN_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
     GENERATED_PW=1
   fi
-  ask GRAFANA_BIND "Grafana listen address (127.0.0.1 = local only, 0.0.0.0 = public)" 127.0.0.1
+  ask GRAFANA_BIND "Grafana listen address (0.0.0.0 = reachable from any network, 127.0.0.1 = local only)" 0.0.0.0
   ask TELEGRAM_BOT_TOKEN "Telegram bot token for alerts (empty = skip)" ""
   TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
   [ -n "$TELEGRAM_BOT_TOKEN" ] && ask TELEGRAM_CHAT_ID "Telegram chat id" ""

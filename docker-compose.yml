@@ -75,7 +75,7 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     ports:
-      - "${GRAFANA_BIND:-127.0.0.1}:3000:3000"
+      - "${GRAFANA_BIND:-0.0.0.0}:3000:3000"
     depends_on: [prometheus]
     networks: [monitoring]
 

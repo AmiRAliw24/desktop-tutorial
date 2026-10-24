@@ -153,7 +153,7 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     ports:
-      - "${GRAFANA_BIND:-127.0.0.1}:3000:3000"
+      - "${GRAFANA_BIND:-0.0.0.0}:3000:3000"
     depends_on: [prometheus]
     networks: [monitoring]
 
@@ -174,9 +174,9 @@ PROMETHEUS_RETENTION=30d
 TELEGRAM_BOT_TOKEN=123456:ABC-your-token
 TELEGRAM_CHAT_ID=123456789
 
-# 127.0.0.1 = Grafana reachable only from the server itself (use an SSH tunnel or reverse proxy)
-# 0.0.0.0   = reachable from the internet on port 3000
-GRAFANA_BIND=127.0.0.1
+# 0.0.0.0   = Grafana reachable from any network on port 3000 (open the port in your firewall)
+# 127.0.0.1 = local only (use an SSH tunnel or reverse proxy)
+GRAFANA_BIND=0.0.0.0
 __MONITORING_EOF__
   write_file .gitignore 644 <<'__MONITORING_EOF__'
 .env
@@ -220,7 +220,7 @@ curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/main/in
 sudo bash install.sh
 ```
 
-نصب‌کننده خودش Docker را (اگر نباشد) نصب می‌کند، همه فایل‌ها را در `/opt/server-monitoring` می‌سازد و استک را بالا می‌آورد. چند سؤال می‌پرسد: رمز Grafana (خالی = رمز تصادفی)، آدرس listen، توکن تلگرام (اختیاری) و لیست سایت‌ها (اختیاری).
+نصب‌کننده خودش Docker را (اگر نباشد) نصب می‌کند، همه فایل‌ها را در `/opt/server-monitoring` می‌سازد و استک را بالا می‌آورد. چند سؤال می‌پرسد: رمز Grafana (خالی = رمز تصادفی)، آدرس listen (پیش‌فرض `0.0.0.0`، یعنی از هر شبکه‌ای)، توکن تلگرام (اختیاری) و لیست سایت‌ها (اختیاری).
 
 بدون سؤال (برای اسکریپت و اتوماسیون):
 
@@ -239,7 +239,7 @@ sudo GRAFANA_ADMIN_PASSWORD='...' GRAFANA_BIND=0.0.0.0 \
 
 اجرای دوباره `install.sh` امن است: فایل‌ها آپدیت می‌شوند ولی `.env` و لیست سایت‌های شما دست نمی‌خورد.
 
-اگر Grafana روی `127.0.0.1` باشد (پیش‌فرض)، از کامپیوتر خودتان با `ssh -L 3000:127.0.0.1:3000 root@SERVER` وصل شوید. اگر `0.0.0.0` انتخاب کنید پورت 3000 باید در فایروال باز باشد، و برای محیط واقعی حتماً HTTPS جلویش بگذارید.
+اگر Grafana را روی `127.0.0.1` بگذارید، از کامپیوتر خودتان با `ssh -L 3000:127.0.0.1:3000 root@SERVER` وصل شوید. با `0.0.0.0` (پیش‌فرض) پورت 3000 باید در فایروال سرور و پنل هاستینگ باز باشد، و برای محیط واقعی حتماً HTTPS جلویش بگذارید.
 
 > `install.sh` از روی فایل‌های همین ریپو ساخته می‌شود. بعد از تغییر هر فایل، `./scripts/build-installer.sh` را اجرا کنید.
 
@@ -1256,7 +1256,7 @@ if [ "$FRESH" = 1 ]; then
     GRAFANA_ADMIN_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
     GENERATED_PW=1
   fi
-  ask GRAFANA_BIND "Grafana listen address (127.0.0.1 = local only, 0.0.0.0 = public)" 127.0.0.1
+  ask GRAFANA_BIND "Grafana listen address (0.0.0.0 = reachable from any network, 127.0.0.1 = local only)" 0.0.0.0
   ask TELEGRAM_BOT_TOKEN "Telegram bot token for alerts (empty = skip)" ""
   TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
   [ -n "$TELEGRAM_BOT_TOKEN" ] && ask TELEGRAM_CHAT_ID "Telegram chat id" ""

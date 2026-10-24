@@ -255,6 +255,24 @@ def classify_failure(reason, http_status):
     return "status" if http_status else "other"
 
 
+def replace_target(kind, old, new):
+    """Swap one address for another, keeping its name (e.g. to monitor a site over http:// instead of https://)."""
+    new = validate_target(kind, new)
+    old = str(old or "").strip()
+    with LOCK:
+        groups = _read_groups(kind)
+        match = next((g for g in groups if old in g["targets"]), None)
+        if match is None:
+            raise ConfigError("Not found")
+        if old != new and any(new in g["targets"] for g in groups):
+            raise ConfigError("This address is already being monitored")
+        labels = {k: v for k, v in (match.get("labels") or {}).items() if k != "check_module"}   # new address: standard check
+        rest = [{**g, "targets": [t for t in g["targets"] if t != old]} for g in groups]
+        rest = [g for g in rest if g["targets"]]
+        rest.append({"targets": [new], "labels": labels})
+        _write_groups(kind, rest)
+
+
 def set_mode(kind, target, mode):
     if kind != "http":
         raise ConfigError("Only websites have a check mode")

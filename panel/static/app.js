@@ -59,10 +59,20 @@
       probe_k_refused: "The server answered but nothing is listening on that port (or a firewall is actively rejecting it).",
       probe_k_dns: "The server cannot resolve this domain name. Check the spelling and the DNS settings of the server.",
       probe_k_timeout: "No answer in time. The host is down, or a firewall silently drops packets from this server.",
-      probe_k_tls: "The TLS certificate has a problem: expired, wrong domain or an untrusted issuer.",
+      probe_k_tls: "The site's certificate has a problem: expired, issued for another domain, or from an untrusted issuer.",
       probe_k_unreachable: "This server has no network route to the address.",
       probe_k_status: "The site answered but with an error status (4xx or 5xx), so it is not counted as healthy.",
       probe_k_other: "The check failed for another reason; see the technical details below.",
+      probe_k_handshake: "The site rejected the secure connection during the TLS handshake. Usual causes: it only supports old TLS versions or ciphers, its certificate/SNI setup is broken, or its firewall refuses this server's IP address. The table below tries the alternatives for you.",
+      v_legacy_tls: "Allow old TLS (1.0 / 1.1)", v_no_verify: "Ignore certificate errors", v_legacy_no_verify: "Old TLS and ignore certificate errors",
+      v_plain_http: "Plain HTTP (no encryption)", v_tcp: "Only connect to the port (TCP)",
+      diag_title: "What works from the server", diag_works: "Works", diag_fails: "Fails", diag_apply: "Monitor this site this way",
+      diag_suggest: "The site passes in the mode marked below. Switch the check to it to monitor the site without false alarms.",
+      diag_applied: "Check mode changed. The status updates within a minute.", mode_default: "standard",
+      mode_legacy_tls: "old TLS", mode_no_verify: "no certificate check", mode_legacy_no_verify: "old TLS, no certificate check",
+      diag_blocked: "The port accepts connections but every secure variant is rejected: the site or its firewall refuses this server specifically (typical for IP/geo blocking).",
+      diag_plain: "Plain HTTP works. The HTTPS side of the site is the problem.",
+      diag_closed: "Even a plain TCP connection fails: the address is unreachable from this server (down, wrong port, or blocked).",
       probe_hint: "If the address opens in your browser but fails here, the server's IP is probably blocked by the site or its network (common for sites hosted in Iran when the monitoring server is abroad), or the server has no route to it. Monitoring shows what the server sees, not what you see.",
       s_wait: "Waiting", w_confirm_remove: "Stop monitoring {n}?", w_hint: "New entries show \"Waiting\" until the first check completes (about a minute).",
       add_server: "Add server", f_srv_addr: "Server address", f_srv_hint: "IP or hostname with the node_exporter port, for example 203.0.113.10:9100",
@@ -159,10 +169,20 @@
       probe_k_refused: "سرور پاسخ داد ولی روی آن پورت چیزی گوش نمی‌دهد (یا فایروال فعالانه رد می‌کند).",
       probe_k_dns: "سرور نمی‌تواند این نام دامنه را پیدا کند. املا و تنظیمات DNS سرور را بررسی کنید.",
       probe_k_timeout: "در زمان مقرر پاسخی نیامد. میزبان خاموش است یا فایروال بی‌صدا بسته‌های این سرور را دور می‌اندازد.",
-      probe_k_tls: "گواهی TLS مشکل دارد: منقضی‌شده، برای دامنه‌ی دیگر یا از مرجع نامعتبر.",
+      probe_k_tls: "گواهی سایت مشکل دارد: منقضی‌شده، برای دامنه‌ی دیگر یا از مرجع نامعتبر.",
       probe_k_unreachable: "این سرور مسیر شبکه‌ای به این آدرس ندارد.",
       probe_k_status: "سایت پاسخ داد ولی با کد خطا (4xx یا 5xx)، پس سالم حساب نمی‌شود.",
       probe_k_other: "چک به دلیل دیگری ناموفق بود؛ جزئیات فنی پایین را ببینید.",
+      probe_k_handshake: "سایت اتصال امن را در مرحله‌ی TLS handshake رد کرد. علت‌های معمول: فقط نسخه‌ها یا رمزهای قدیمی TLS را می‌پذیرد، تنظیم گواهی/SNI خراب است، یا فایروالش IP این سرور را رد می‌کند. جدول پایین گزینه‌های جایگزین را برایتان امتحان می‌کند.",
+      v_legacy_tls: "پذیرش TLS قدیمی (۱.۰ / ۱.۱)", v_no_verify: "نادیده گرفتن خطای گواهی", v_legacy_no_verify: "TLS قدیمی و نادیده گرفتن خطای گواهی",
+      v_plain_http: "HTTP ساده (بدون رمزنگاری)", v_tcp: "فقط اتصال به پورت (TCP)",
+      diag_title: "چه چیزی از سرور کار می‌کند", diag_works: "کار می‌کند", diag_fails: "ناموفق", diag_apply: "مانیتور سایت با این حالت",
+      diag_suggest: "سایت در حالتی که پایین علامت خورده موفق است. چک را روی آن بگذارید تا بدون هشدار اشتباه مانیتور شود.",
+      diag_applied: "حالت چک عوض شد. وضعیت تا یک دقیقه‌ی دیگر بروز می‌شود.", mode_default: "استاندارد",
+      mode_legacy_tls: "TLS قدیمی", mode_no_verify: "بدون بررسی گواهی", mode_legacy_no_verify: "TLS قدیمی، بدون بررسی گواهی",
+      diag_blocked: "پورت اتصال را می‌پذیرد ولی همه‌ی حالت‌های امن رد می‌شوند: سایت یا فایروالش مشخصاً این سرور را رد می‌کند (معمول در مسدودسازی IP یا جغرافیایی).",
+      diag_plain: "HTTP ساده کار می‌کند. مشکل از بخش HTTPS سایت است.",
+      diag_closed: "حتی اتصال ساده‌ی TCP هم ناموفق است: آدرس از این سرور در دسترس نیست (خاموش، پورت اشتباه یا مسدود).",
       probe_hint: "اگر آدرس در مرورگر شما باز می‌شود ولی اینجا ناموفق است، احتمالاً IP سرور توسط سایت یا شبکه‌اش مسدود است (برای سایت‌های میزبانی‌شده در ایران وقتی سرور مانیتورینگ خارج از ایران است رایج است) یا سرور مسیری به آن ندارد. مانیتورینگ همان چیزی را نشان می‌دهد که «سرور» می‌بیند، نه آنچه شما می‌بینید.",
       s_wait: "در انتظار", w_confirm_remove: "نظارت بر {n} متوقف شود؟", w_hint: "موارد جدید تا تکمیل اولین چک (حدود یک دقیقه) «در انتظار» نشان داده می‌شوند.",
       add_server: "افزودن سرور", f_srv_addr: "آدرس سرور", f_srv_hint: "آی‌پی یا نام سرور همراه پورت node_exporter، مثل 203.0.113.10:9100",
@@ -536,7 +556,7 @@
         const extra = metrics.filter((m) => !known.has(m.target)).map((m) => ({ target: m.target, name: "", kind: m.job === "tcp" ? "tcp" : "http", fixed: true }));
         const rows = [...managed, ...extra].map((r) => ({ ...r, m: byTarget.get(r.target) }));
         const cols = [
-          { h: "target", cls: "strong", cell: (r) => `${num(esc(r.target))}${r.name ? `<div class="sub-line">${esc(r.name)}</div>` : ""}` },
+          { h: "target", cls: "strong", cell: (r) => `${num(esc(r.target))}${r.mode && r.mode !== "default" ? `<span class="tag">${esc(t("mode_" + r.mode))}</span>` : ""}${r.name ? `<div class="sub-line">${esc(r.name)}</div>` : ""}` },
           { h: "type", cell: (r) => pill("info", r.kind.toUpperCase(), false) },
           { h: "status", cell: (r) => statusPill(r.m && r.m.up, !!r.m) },
           { h: "response", cell: (r) => num(r.m ? fmtMs(r.m.duration) : "–") },
@@ -809,11 +829,30 @@
         try {
           const r = await post("/api/checks/probe", { kind, target });
           const status = r.http_status ? ` · ${esc(t("probe_status"))}: ${num(r.http_status)}` : "";
+          let diag = "";
+          if (r.variants && r.variants.length) {
+            const by = Object.fromEntries(r.variants.map((v) => [v.id, v]));
+            const secureOk = r.variants.some((v) => v.ok && v.id in { legacy_tls: 1, no_verify: 1, legacy_no_verify: 1 });
+            const note = secureOk ? t("diag_suggest")
+              : by.plain_http && by.plain_http.ok ? t("diag_plain")
+              : by.tcp && by.tcp.ok ? t("diag_blocked") : t("diag_closed");
+            const rows = r.variants.map((v) => {
+              const label = t(v.id === "tcp" ? "v_tcp" : `v_${v.id}`);
+              const apply = v.ok && v.id in { legacy_tls: 1, no_verify: 1, legacy_no_verify: 1 }
+                ? `<button type="button" class="btn small primary" data-mode="${v.id}">${esc(t("diag_apply"))}</button>` : "";
+              return `<tr><td>${v.ok ? pill("ok", t("diag_works")) : pill("bad", t("diag_fails"))}</td><td class="strong" style="white-space:normal">${esc(label)}${apply ? `<div style="margin-top:8px">${apply}</div>` : ""}</td><td class="wrap-cell muted" style="min-width:300px">${v.ok ? "" : `<code class="reason">${esc(v.reason)}</code>`}</td></tr>`;
+            }).join("");
+            diag = `<h4 style="margin:18px 0 8px">${esc(t("diag_title"))}</h4><p class="muted">${esc(note)}</p><div class="table-wrap"><table><tbody>${rows}</tbody></table></div>`;
+          }
           out.innerHTML = `<div class="notice ${r.ok ? "ok" : "bad"}">${icon(r.ok ? "okmark" : "bell")}<span><b>${esc(t(r.ok ? "probe_ok" : "probe_fail"))}</b>${status}</span></div>
             ${r.ok ? "" : `<p>${esc(t("probe_k_" + (r.kind || "other")))}</p>`}
             ${r.reason ? `<p><b>${esc(t("probe_reason"))}:</b> <code>${esc(r.reason)}</code></p>` : ""}
+            ${diag}
             ${r.ok ? "" : `<p class="muted">${esc(t("probe_hint"))}</p>`}
             <details><summary>${esc(t("probe_log"))}</summary><pre class="logs" style="height:280px;margin-top:10px">${esc(r.log)}</pre></details>`;
+          out.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", async () => {
+            if (await act(b, () => post("/api/checks/mode", { kind, target, mode: b.dataset.mode }), t("diag_applied"))) { dlg.close(); renderView(false); }
+          }));
         } catch (e) { out.innerHTML = `<div class="notice bad">${icon("bell")}<span>${esc(e.message)}</span></div>`; }
       },
     });

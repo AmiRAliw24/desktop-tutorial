@@ -123,6 +123,11 @@ def post_checks_probe(b, _h):
     return store.probe_debug(b.get("kind"), b.get("target"))
 
 
+def post_checks_mode(b, _h):
+    store.set_mode(b.get("kind"), b.get("target"), b.get("mode"))
+    return {"ok": True}
+
+
 def post_telegram_save(b, _h):
     return {"ok": True, **store.save_telegram(b.get("token", ""), b.get("chat_id", ""))}
 
@@ -172,7 +177,7 @@ def post_password(b, h):
 
 
 POST_API = {
-    "/api/checks/add": post_checks_add, "/api/checks/remove": post_checks_remove, "/api/checks/probe": post_checks_probe,
+    "/api/checks/add": post_checks_add, "/api/checks/remove": post_checks_remove, "/api/checks/probe": post_checks_probe, "/api/checks/mode": post_checks_mode,
     "/api/telegram/save": post_telegram_save, "/api/telegram/test": post_telegram_test,
     "/api/telegram/chats": post_telegram_chats, "/api/telegram/remove": post_telegram_remove,
     "/api/alerts/test": post_alert_test, "/api/rules/set": post_rules_set, "/api/rules/reset": post_rules_reset,

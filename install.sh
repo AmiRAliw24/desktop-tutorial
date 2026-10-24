@@ -269,7 +269,7 @@ __MONITORING_EOF__
 **مانیتورها:** نمای کلی، کانتینرها، سایت‌ها، دیسک‌ها، شبکه، تارگت‌ها، هشدارها.
 
 **مدیریت (همه از پنل):**
-- **سایت‌ها:** افزودن/حذف سایت (HTTP/HTTPS) و پورت TCP برای چک آپتایم، زمان پاسخ و انقضای SSL. دکمه‌ی ذره‌بین کنار هر ردیف چک را همان لحظه اجرا می‌کند و **دلیل ناموفق بودن** را به زبان ساده می‌گوید (قطع شدن handshake توسط سایت، پورت بسته، DNS، timeout، مشکل گواهی، کد خطای HTTP).
+- **سایت‌ها:** افزودن/حذف سایت (HTTP/HTTPS) و پورت TCP برای چک آپتایم، زمان پاسخ و انقضای SSL. دکمه‌ی ذره‌بین کنار هر ردیف چک را همان لحظه اجرا می‌کند و **دلیل ناموفق بودن** را به زبان ساده می‌گوید (قطع شدن handshake توسط سایت، پورت بسته، DNS، timeout، مشکل گواهی، کد خطای HTTP). برای سایتی که چک استاندارد را رد می‌کند، خودش حالت‌های دیگر (TLS قدیمی ۱.۰/۱.۱، نادیده گرفتن خطای گواهی، HTTP ساده، فقط اتصال TCP) را هم امتحان می‌کند و می‌گوید کدام کار می‌کند؛ با یک کلیک همان حالت برای مانیتور آن سایت فعال می‌شود (کنار آدرس برچسب حالت دیده می‌شود).
 - **سرورها:** افزودن/حذف سرورهای دیگر (با `node_exporter`)؛ دستور نصب روی سرور مقصد را همان‌جا می‌دهد.
 - **کانتینرها:** شروع، توقف، ری‌استارت، دیدن لاگ، حذف و **ساخت کانتینر جدید** (ایمیج، پورت، متغیر محیطی، ولیوم، سیاست ری‌استارت).
 - **اعلان‌ها:** اتصال ربات تلگرام (با دکمه‌ی «پیدا کردن Chat ID»)، پیام آزمایشی و هشدار آزمایشی.
@@ -419,12 +419,17 @@ scrape_configs:
   # Uptime / SSL checks. Targets live in prometheus/targets/http.json, managed from the panel.
   - job_name: blackbox-http
     metrics_path: /probe
-    params:
-      module: [http_2xx]
     file_sd_configs:
       - files: [/etc/prometheus/targets/http.json]
         refresh_interval: 15s
     relabel_configs:
+      # Standard check, unless the site has a check_module label (set from the panel for sites that need
+      # old TLS or must ignore certificate errors). A fixed `params: module` would override any label.
+      - target_label: __param_module
+        replacement: http_2xx
+      - source_labels: [check_module]
+        regex: (.+)
+        target_label: __param_module
       - source_labels: [__address__]
         target_label: __param_target
       - source_labels: [__param_target]
@@ -456,6 +461,39 @@ modules:
     http:
       preferred_ip_protocol: ip4
       follow_redirects: true
+
+  # The variants below exist for sites that fail the normal check. The panel tries them for you
+  # ("Test now / why?" on the Websites page) and can switch a single site to one of them.
+  # Sites that only speak the outdated TLS 1.0 / 1.1:
+  http_2xx_legacy:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: ip4
+      follow_redirects: true
+      tls_config:
+        min_version: TLS10
+
+  # Sites whose certificate is expired, self-signed or for another name:
+  http_2xx_insecure:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: ip4
+      follow_redirects: true
+      tls_config:
+        insecure_skip_verify: true
+
+  http_2xx_legacy_insecure:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: ip4
+      follow_redirects: true
+      tls_config:
+        min_version: TLS10
+        insecure_skip_verify: true
+
   tcp_connect:
     prober: tcp
     timeout: 5s
@@ -616,6 +654,11 @@ def post_checks_probe(b, _h):
     return store.probe_debug(b.get("kind"), b.get("target"))
 
 
+def post_checks_mode(b, _h):
+    store.set_mode(b.get("kind"), b.get("target"), b.get("mode"))
+    return {"ok": True}
+
+
 def post_telegram_save(b, _h):
     return {"ok": True, **store.save_telegram(b.get("token", ""), b.get("chat_id", ""))}
 
@@ -665,7 +708,7 @@ def post_password(b, h):
 
 
 POST_API = {
-    "/api/checks/add": post_checks_add, "/api/checks/remove": post_checks_remove, "/api/checks/probe": post_checks_probe,
+    "/api/checks/add": post_checks_add, "/api/checks/remove": post_checks_remove, "/api/checks/probe": post_checks_probe, "/api/checks/mode": post_checks_mode,
     "/api/telegram/save": post_telegram_save, "/api/telegram/test": post_telegram_test,
     "/api/telegram/chats": post_telegram_chats, "/api/telegram/remove": post_telegram_remove,
     "/api/alerts/test": post_alert_test, "/api/rules/set": post_rules_set, "/api/rules/reset": post_rules_reset,
@@ -830,6 +873,7 @@ import os
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
@@ -910,6 +954,11 @@ def save_settings(settings):
 # ------------------------------------------------------------------ targets (sites, ports, servers)
 
 KINDS = {"http": "http.json", "tcp": "tcp.json", "nodes": "nodes.json"}
+# How an HTTP(S) site is checked. Each mode is a blackbox module (see blackbox/blackbox.yml); a site that
+# needs a non-default one gets a check_module label, which prometheus.yml relabels into the probe's module.
+HTTP_MODES = {"default": "http_2xx", "legacy_tls": "http_2xx_legacy", "no_verify": "http_2xx_insecure",
+              "legacy_no_verify": "http_2xx_legacy_insecure"}
+MODE_BY_MODULE = {v: k for k, v in HTTP_MODES.items()}
 MAX_TARGETS = 200
 URL_RE = re.compile(r"^https?://[^\s\"'`<>\\]{1,500}$")
 HOST_PORT_RE = re.compile(r"^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\]):(\d{1,5})$")
@@ -954,7 +1003,8 @@ def list_targets(kind):
         labels = g.get("labels") or {}
         for t in g["targets"]:
             rows.append({"target": t, "name": labels.get("name") or labels.get("instance_name") or "",
-                         "locked": kind == "nodes" and t == LOCAL_NODE})
+                         "locked": kind == "nodes" and t == LOCAL_NODE,
+                         "mode": MODE_BY_MODULE.get(labels.get("check_module", ""), "default") if kind == "http" else "default"})
     return rows
 
 
@@ -991,14 +1041,8 @@ def remove_target(kind, target):
         _write_groups(kind, kept)
 
 
-def probe_debug(kind, target):
-    """Run one check right now through the blackbox exporter and return why it passed or failed."""
-    if kind not in ("http", "tcp"):
-        raise ConfigError("unknown kind")
-    target = str(target or "").strip()
-    if not any(r["target"] == target for r in list_targets(kind)):
-        raise ConfigError("Only monitored addresses can be tested")
-    query = urlencode({"module": "http_2xx" if kind == "http" else "tcp_connect", "target": target, "debug": "true"})
+def _blackbox(module, target):
+    query = urlencode({"module": module, "target": target, "debug": "true"})
     try:
         with urlopen(f"{BLACKBOX_URL}/probe?{query}", timeout=25) as resp:
             text = resp.read(200_000).decode("utf-8", "replace")
@@ -1019,9 +1063,44 @@ def probe_debug(kind, target):
             "log": "\n".join(l for l in text.splitlines() if not l.startswith("#"))[-20000:]}
 
 
+def probe_debug(kind, target):
+    """Run one check right now and say why it failed. For a failing website also try the other modes
+    (old TLS, ignoring certificate errors, plain HTTP, bare TCP) so the user can see what would work."""
+    if kind not in ("http", "tcp"):
+        raise ConfigError("unknown kind")
+    target = str(target or "").strip()
+    row = next((r for r in list_targets(kind) if r["target"] == target), None)
+    if row is None:
+        raise ConfigError("Only monitored addresses can be tested")
+    mode = row["mode"]
+    result = _blackbox(HTTP_MODES[mode] if kind == "http" else "tcp_connect", target)
+    result["mode"] = mode
+    result["variants"], result["suggest"] = [], ""
+    if result["ok"] or kind != "http":
+        return result
+
+    parsed = urlparse(target)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    host = f"[{parsed.hostname}]" if ":" in (parsed.hostname or "") else parsed.hostname
+    plan = [(m, HTTP_MODES[m], target) for m in HTTP_MODES if m != mode]
+    if parsed.scheme == "https":
+        plan.append(("plain_http", "http_2xx", "http://" + target[len("https://"):]))
+    plan.append(("tcp", "tcp_connect", f"{host}:{port}"))
+    with ThreadPoolExecutor(max_workers=len(plan)) as pool:
+        outcomes = list(pool.map(lambda p: _blackbox(p[1], p[2]), plan))
+    for (vid, _module, _target), out in zip(plan, outcomes):
+        result["variants"].append({"id": vid, "ok": out["ok"], "reason": out["reason"], "kind": out["kind"], "http_status": out["http_status"]})
+    result["suggest"] = next((v["id"] for v in result["variants"] if v["ok"] and v["id"] in HTTP_MODES), "")
+    return result
+
+
 def classify_failure(reason, http_status):
     """Map a blackbox error to a short code the UI turns into a plain-language explanation."""
     r = reason.lower()
+    if "x509" in r or "certificate" in r:                  # checked first: these errors also contain "tls:"
+        return "tls"
+    if "handshake failure" in r or "protocol version" in r or "no cipher" in r or "remote error: tls" in r:
+        return "handshake"
     if "connection reset" in r or "unexpected eof" in r or "eof" in r.split(":")[-1]:
         return "reset"
     if "connection refused" in r:
@@ -1030,13 +1109,38 @@ def classify_failure(reason, http_status):
         return "dns"
     if "timeout" in r or "deadline exceeded" in r:
         return "timeout"
-    if "x509" in r or "certificate" in r or "tls:" in r:
-        return "tls"
     if "network is unreachable" in r or "no route" in r:
         return "unreachable"
     if http_status and not reason:
         return "status"
     return "status" if http_status else "other"
+
+
+def set_mode(kind, target, mode):
+    if kind != "http":
+        raise ConfigError("Only websites have a check mode")
+    if mode not in HTTP_MODES:
+        raise ConfigError("Unknown mode")
+    target = str(target or "").strip()
+    with LOCK:
+        groups = _read_groups("http")
+        hit = False
+        for g in groups:
+            if target in g["targets"]:
+                labels = dict(g.get("labels") or {})
+                labels.pop("check_module", None)
+                if mode != "default":
+                    labels["check_module"] = HTTP_MODES[mode]
+                if len(g["targets"]) > 1:      # keep other targets of a shared group untouched
+                    g["targets"] = [t for t in g["targets"] if t != target]
+                    groups.append({"targets": [target], "labels": labels})
+                else:
+                    g["labels"] = labels
+                hit = True
+                break
+        if not hit:
+            raise ConfigError("Not found")
+        _write_groups("http", groups)
 
 
 def _legacy_items(text):
@@ -2210,10 +2314,20 @@ __MONITORING_EOF__
       probe_k_refused: "The server answered but nothing is listening on that port (or a firewall is actively rejecting it).",
       probe_k_dns: "The server cannot resolve this domain name. Check the spelling and the DNS settings of the server.",
       probe_k_timeout: "No answer in time. The host is down, or a firewall silently drops packets from this server.",
-      probe_k_tls: "The TLS certificate has a problem: expired, wrong domain or an untrusted issuer.",
+      probe_k_tls: "The site's certificate has a problem: expired, issued for another domain, or from an untrusted issuer.",
       probe_k_unreachable: "This server has no network route to the address.",
       probe_k_status: "The site answered but with an error status (4xx or 5xx), so it is not counted as healthy.",
       probe_k_other: "The check failed for another reason; see the technical details below.",
+      probe_k_handshake: "The site rejected the secure connection during the TLS handshake. Usual causes: it only supports old TLS versions or ciphers, its certificate/SNI setup is broken, or its firewall refuses this server's IP address. The table below tries the alternatives for you.",
+      v_legacy_tls: "Allow old TLS (1.0 / 1.1)", v_no_verify: "Ignore certificate errors", v_legacy_no_verify: "Old TLS and ignore certificate errors",
+      v_plain_http: "Plain HTTP (no encryption)", v_tcp: "Only connect to the port (TCP)",
+      diag_title: "What works from the server", diag_works: "Works", diag_fails: "Fails", diag_apply: "Monitor this site this way",
+      diag_suggest: "The site passes in the mode marked below. Switch the check to it to monitor the site without false alarms.",
+      diag_applied: "Check mode changed. The status updates within a minute.", mode_default: "standard",
+      mode_legacy_tls: "old TLS", mode_no_verify: "no certificate check", mode_legacy_no_verify: "old TLS, no certificate check",
+      diag_blocked: "The port accepts connections but every secure variant is rejected: the site or its firewall refuses this server specifically (typical for IP/geo blocking).",
+      diag_plain: "Plain HTTP works. The HTTPS side of the site is the problem.",
+      diag_closed: "Even a plain TCP connection fails: the address is unreachable from this server (down, wrong port, or blocked).",
       probe_hint: "If the address opens in your browser but fails here, the server's IP is probably blocked by the site or its network (common for sites hosted in Iran when the monitoring server is abroad), or the server has no route to it. Monitoring shows what the server sees, not what you see.",
       s_wait: "Waiting", w_confirm_remove: "Stop monitoring {n}?", w_hint: "New entries show \"Waiting\" until the first check completes (about a minute).",
       add_server: "Add server", f_srv_addr: "Server address", f_srv_hint: "IP or hostname with the node_exporter port, for example 203.0.113.10:9100",
@@ -2310,10 +2424,20 @@ __MONITORING_EOF__
       probe_k_refused: "سرور پاسخ داد ولی روی آن پورت چیزی گوش نمی‌دهد (یا فایروال فعالانه رد می‌کند).",
       probe_k_dns: "سرور نمی‌تواند این نام دامنه را پیدا کند. املا و تنظیمات DNS سرور را بررسی کنید.",
       probe_k_timeout: "در زمان مقرر پاسخی نیامد. میزبان خاموش است یا فایروال بی‌صدا بسته‌های این سرور را دور می‌اندازد.",
-      probe_k_tls: "گواهی TLS مشکل دارد: منقضی‌شده، برای دامنه‌ی دیگر یا از مرجع نامعتبر.",
+      probe_k_tls: "گواهی سایت مشکل دارد: منقضی‌شده، برای دامنه‌ی دیگر یا از مرجع نامعتبر.",
       probe_k_unreachable: "این سرور مسیر شبکه‌ای به این آدرس ندارد.",
       probe_k_status: "سایت پاسخ داد ولی با کد خطا (4xx یا 5xx)، پس سالم حساب نمی‌شود.",
       probe_k_other: "چک به دلیل دیگری ناموفق بود؛ جزئیات فنی پایین را ببینید.",
+      probe_k_handshake: "سایت اتصال امن را در مرحله‌ی TLS handshake رد کرد. علت‌های معمول: فقط نسخه‌ها یا رمزهای قدیمی TLS را می‌پذیرد، تنظیم گواهی/SNI خراب است، یا فایروالش IP این سرور را رد می‌کند. جدول پایین گزینه‌های جایگزین را برایتان امتحان می‌کند.",
+      v_legacy_tls: "پذیرش TLS قدیمی (۱.۰ / ۱.۱)", v_no_verify: "نادیده گرفتن خطای گواهی", v_legacy_no_verify: "TLS قدیمی و نادیده گرفتن خطای گواهی",
+      v_plain_http: "HTTP ساده (بدون رمزنگاری)", v_tcp: "فقط اتصال به پورت (TCP)",
+      diag_title: "چه چیزی از سرور کار می‌کند", diag_works: "کار می‌کند", diag_fails: "ناموفق", diag_apply: "مانیتور سایت با این حالت",
+      diag_suggest: "سایت در حالتی که پایین علامت خورده موفق است. چک را روی آن بگذارید تا بدون هشدار اشتباه مانیتور شود.",
+      diag_applied: "حالت چک عوض شد. وضعیت تا یک دقیقه‌ی دیگر بروز می‌شود.", mode_default: "استاندارد",
+      mode_legacy_tls: "TLS قدیمی", mode_no_verify: "بدون بررسی گواهی", mode_legacy_no_verify: "TLS قدیمی، بدون بررسی گواهی",
+      diag_blocked: "پورت اتصال را می‌پذیرد ولی همه‌ی حالت‌های امن رد می‌شوند: سایت یا فایروالش مشخصاً این سرور را رد می‌کند (معمول در مسدودسازی IP یا جغرافیایی).",
+      diag_plain: "HTTP ساده کار می‌کند. مشکل از بخش HTTPS سایت است.",
+      diag_closed: "حتی اتصال ساده‌ی TCP هم ناموفق است: آدرس از این سرور در دسترس نیست (خاموش، پورت اشتباه یا مسدود).",
       probe_hint: "اگر آدرس در مرورگر شما باز می‌شود ولی اینجا ناموفق است، احتمالاً IP سرور توسط سایت یا شبکه‌اش مسدود است (برای سایت‌های میزبانی‌شده در ایران وقتی سرور مانیتورینگ خارج از ایران است رایج است) یا سرور مسیری به آن ندارد. مانیتورینگ همان چیزی را نشان می‌دهد که «سرور» می‌بیند، نه آنچه شما می‌بینید.",
       s_wait: "در انتظار", w_confirm_remove: "نظارت بر {n} متوقف شود؟", w_hint: "موارد جدید تا تکمیل اولین چک (حدود یک دقیقه) «در انتظار» نشان داده می‌شوند.",
       add_server: "افزودن سرور", f_srv_addr: "آدرس سرور", f_srv_hint: "آی‌پی یا نام سرور همراه پورت node_exporter، مثل 203.0.113.10:9100",
@@ -2687,7 +2811,7 @@ __MONITORING_EOF__
         const extra = metrics.filter((m) => !known.has(m.target)).map((m) => ({ target: m.target, name: "", kind: m.job === "tcp" ? "tcp" : "http", fixed: true }));
         const rows = [...managed, ...extra].map((r) => ({ ...r, m: byTarget.get(r.target) }));
         const cols = [
-          { h: "target", cls: "strong", cell: (r) => `${num(esc(r.target))}${r.name ? `<div class="sub-line">${esc(r.name)}</div>` : ""}` },
+          { h: "target", cls: "strong", cell: (r) => `${num(esc(r.target))}${r.mode && r.mode !== "default" ? `<span class="tag">${esc(t("mode_" + r.mode))}</span>` : ""}${r.name ? `<div class="sub-line">${esc(r.name)}</div>` : ""}` },
           { h: "type", cell: (r) => pill("info", r.kind.toUpperCase(), false) },
           { h: "status", cell: (r) => statusPill(r.m && r.m.up, !!r.m) },
           { h: "response", cell: (r) => num(r.m ? fmtMs(r.m.duration) : "–") },
@@ -2960,11 +3084,30 @@ __MONITORING_EOF__
         try {
           const r = await post("/api/checks/probe", { kind, target });
           const status = r.http_status ? ` · ${esc(t("probe_status"))}: ${num(r.http_status)}` : "";
+          let diag = "";
+          if (r.variants && r.variants.length) {
+            const by = Object.fromEntries(r.variants.map((v) => [v.id, v]));
+            const secureOk = r.variants.some((v) => v.ok && v.id in { legacy_tls: 1, no_verify: 1, legacy_no_verify: 1 });
+            const note = secureOk ? t("diag_suggest")
+              : by.plain_http && by.plain_http.ok ? t("diag_plain")
+              : by.tcp && by.tcp.ok ? t("diag_blocked") : t("diag_closed");
+            const rows = r.variants.map((v) => {
+              const label = t(v.id === "tcp" ? "v_tcp" : `v_${v.id}`);
+              const apply = v.ok && v.id in { legacy_tls: 1, no_verify: 1, legacy_no_verify: 1 }
+                ? `<button type="button" class="btn small primary" data-mode="${v.id}">${esc(t("diag_apply"))}</button>` : "";
+              return `<tr><td>${v.ok ? pill("ok", t("diag_works")) : pill("bad", t("diag_fails"))}</td><td class="strong" style="white-space:normal">${esc(label)}${apply ? `<div style="margin-top:8px">${apply}</div>` : ""}</td><td class="wrap-cell muted" style="min-width:300px">${v.ok ? "" : `<code class="reason">${esc(v.reason)}</code>`}</td></tr>`;
+            }).join("");
+            diag = `<h4 style="margin:18px 0 8px">${esc(t("diag_title"))}</h4><p class="muted">${esc(note)}</p><div class="table-wrap"><table><tbody>${rows}</tbody></table></div>`;
+          }
           out.innerHTML = `<div class="notice ${r.ok ? "ok" : "bad"}">${icon(r.ok ? "okmark" : "bell")}<span><b>${esc(t(r.ok ? "probe_ok" : "probe_fail"))}</b>${status}</span></div>
             ${r.ok ? "" : `<p>${esc(t("probe_k_" + (r.kind || "other")))}</p>`}
             ${r.reason ? `<p><b>${esc(t("probe_reason"))}:</b> <code>${esc(r.reason)}</code></p>` : ""}
+            ${diag}
             ${r.ok ? "" : `<p class="muted">${esc(t("probe_hint"))}</p>`}
             <details><summary>${esc(t("probe_log"))}</summary><pre class="logs" style="height:280px;margin-top:10px">${esc(r.log)}</pre></details>`;
+          out.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", async () => {
+            if (await act(b, () => post("/api/checks/mode", { kind, target, mode: b.dataset.mode }), t("diag_applied"))) { dlg.close(); renderView(false); }
+          }));
         } catch (e) { out.innerHTML = `<div class="notice bad">${icon("bell")}<span>${esc(e.message)}</span></div>`; }
       },
     });
@@ -3559,6 +3702,8 @@ pre.logs { margin: 0; background: var(--bg); border: 1px solid var(--border); bo
   .subcard { padding: 16px; }
   .modal-form header, .modal-body, .modal-form footer { padding-inline: 16px; }
 }
+
+code.reason { word-break: normal; overflow-wrap: anywhere; line-height: 1.5; }
 __MONITORING_EOF__
   write_file panel/static/favicon.svg 644 <<'__MONITORING_EOF__'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#0e1520"/><path d="M16 5l9 3.5v7c0 5.4-3.7 9.2-9 11.5-5.3-2.3-9-6.1-9-11.5v-7L16 5z" fill="none" stroke="#2ee6a6" stroke-width="2" stroke-linejoin="round"/><path d="M10.5 16h3l2-3.5 2.5 7 2-3.5h1.5" fill="none" stroke="#2ee6a6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -3718,7 +3863,7 @@ remove_legacy_grafana
 choose_port PANEL_PORT panel 8080 3000
 compose up -d --remove-orphans < /dev/null
 # Config files are bind-mounted, so running containers need a nudge to re-read them.
-compose kill -s SIGHUP prometheus alertmanager < /dev/null >/dev/null 2>&1 || true
+compose kill -s SIGHUP prometheus alertmanager blackbox < /dev/null >/dev/null 2>&1 || true
 # The panel's Python code is loaded once at start, so an updated server.py needs a restart.
 compose restart panel < /dev/null >/dev/null 2>&1 || true
 

@@ -38,12 +38,17 @@ scrape_configs:
   # Uptime / SSL checks. Targets live in prometheus/targets/http.json, managed from the panel.
   - job_name: blackbox-http
     metrics_path: /probe
-    params:
-      module: [http_2xx]
     file_sd_configs:
       - files: [/etc/prometheus/targets/http.json]
         refresh_interval: 15s
     relabel_configs:
+      # Standard check, unless the site has a check_module label (set from the panel for sites that need
+      # old TLS or must ignore certificate errors). A fixed `params: module` would override any label.
+      - target_label: __param_module
+        replacement: http_2xx
+      - source_labels: [check_module]
+        regex: (.+)
+        target_label: __param_module
       - source_labels: [__address__]
         target_label: __param_target
       - source_labels: [__param_target]

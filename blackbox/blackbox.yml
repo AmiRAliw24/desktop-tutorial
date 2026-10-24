@@ -5,6 +5,39 @@ modules:
     http:
       preferred_ip_protocol: ip4
       follow_redirects: true
+
+  # The variants below exist for sites that fail the normal check. The panel tries them for you
+  # ("Test now / why?" on the Websites page) and can switch a single site to one of them.
+  # Sites that only speak the outdated TLS 1.0 / 1.1:
+  http_2xx_legacy:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: ip4
+      follow_redirects: true
+      tls_config:
+        min_version: TLS10
+
+  # Sites whose certificate is expired, self-signed or for another name:
+  http_2xx_insecure:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: ip4
+      follow_redirects: true
+      tls_config:
+        insecure_skip_verify: true
+
+  http_2xx_legacy_insecure:
+    prober: http
+    timeout: 10s
+    http:
+      preferred_ip_protocol: ip4
+      follow_redirects: true
+      tls_config:
+        min_version: TLS10
+        insecure_skip_verify: true
+
   tcp_connect:
     prober: tcp
     timeout: 5s

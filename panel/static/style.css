@@ -293,3 +293,5 @@ pre.logs { margin: 0; background: var(--bg); border: 1px solid var(--border); bo
   .subcard { padding: 16px; }
   .modal-form header, .modal-body, .modal-form footer { padding-inline: 16px; }
 }
+
+code.reason { word-break: normal; overflow-wrap: anywhere; line-height: 1.5; }

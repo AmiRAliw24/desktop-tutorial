@@ -12,6 +12,7 @@ import os
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
@@ -92,6 +93,11 @@ def save_settings(settings):
 # ------------------------------------------------------------------ targets (sites, ports, servers)
 
 KINDS = {"http": "http.json", "tcp": "tcp.json", "nodes": "nodes.json"}
+# How an HTTP(S) site is checked. Each mode is a blackbox module (see blackbox/blackbox.yml); a site that
+# needs a non-default one gets a check_module label, which prometheus.yml relabels into the probe's module.
+HTTP_MODES = {"default": "http_2xx", "legacy_tls": "http_2xx_legacy", "no_verify": "http_2xx_insecure",
+              "legacy_no_verify": "http_2xx_legacy_insecure"}
+MODE_BY_MODULE = {v: k for k, v in HTTP_MODES.items()}
 MAX_TARGETS = 200
 URL_RE = re.compile(r"^https?://[^\s\"'`<>\\]{1,500}$")
 HOST_PORT_RE = re.compile(r"^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\]):(\d{1,5})$")
@@ -136,7 +142,8 @@ def list_targets(kind):
         labels = g.get("labels") or {}
         for t in g["targets"]:
             rows.append({"target": t, "name": labels.get("name") or labels.get("instance_name") or "",
-                         "locked": kind == "nodes" and t == LOCAL_NODE})
+                         "locked": kind == "nodes" and t == LOCAL_NODE,
+                         "mode": MODE_BY_MODULE.get(labels.get("check_module", ""), "default") if kind == "http" else "default"})
     return rows
 
 
@@ -173,14 +180,8 @@ def remove_target(kind, target):
         _write_groups(kind, kept)
 
 
-def probe_debug(kind, target):
-    """Run one check right now through the blackbox exporter and return why it passed or failed."""
-    if kind not in ("http", "tcp"):
-        raise ConfigError("unknown kind")
-    target = str(target or "").strip()
-    if not any(r["target"] == target for r in list_targets(kind)):
-        raise ConfigError("Only monitored addresses can be tested")
-    query = urlencode({"module": "http_2xx" if kind == "http" else "tcp_connect", "target": target, "debug": "true"})
+def _blackbox(module, target):
+    query = urlencode({"module": module, "target": target, "debug": "true"})
     try:
         with urlopen(f"{BLACKBOX_URL}/probe?{query}", timeout=25) as resp:
             text = resp.read(200_000).decode("utf-8", "replace")
@@ -201,9 +202,44 @@ def probe_debug(kind, target):
             "log": "\n".join(l for l in text.splitlines() if not l.startswith("#"))[-20000:]}
 
 
+def probe_debug(kind, target):
+    """Run one check right now and say why it failed. For a failing website also try the other modes
+    (old TLS, ignoring certificate errors, plain HTTP, bare TCP) so the user can see what would work."""
+    if kind not in ("http", "tcp"):
+        raise ConfigError("unknown kind")
+    target = str(target or "").strip()
+    row = next((r for r in list_targets(kind) if r["target"] == target), None)
+    if row is None:
+        raise ConfigError("Only monitored addresses can be tested")
+    mode = row["mode"]
+    result = _blackbox(HTTP_MODES[mode] if kind == "http" else "tcp_connect", target)
+    result["mode"] = mode
+    result["variants"], result["suggest"] = [], ""
+    if result["ok"] or kind != "http":
+        return result
+
+    parsed = urlparse(target)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    host = f"[{parsed.hostname}]" if ":" in (parsed.hostname or "") else parsed.hostname
+    plan = [(m, HTTP_MODES[m], target) for m in HTTP_MODES if m != mode]
+    if parsed.scheme == "https":
+        plan.append(("plain_http", "http_2xx", "http://" + target[len("https://"):]))
+    plan.append(("tcp", "tcp_connect", f"{host}:{port}"))
+    with ThreadPoolExecutor(max_workers=len(plan)) as pool:
+        outcomes = list(pool.map(lambda p: _blackbox(p[1], p[2]), plan))
+    for (vid, _module, _target), out in zip(plan, outcomes):
+        result["variants"].append({"id": vid, "ok": out["ok"], "reason": out["reason"], "kind": out["kind"], "http_status": out["http_status"]})
+    result["suggest"] = next((v["id"] for v in result["variants"] if v["ok"] and v["id"] in HTTP_MODES), "")
+    return result
+
+
 def classify_failure(reason, http_status):
     """Map a blackbox error to a short code the UI turns into a plain-language explanation."""
     r = reason.lower()
+    if "x509" in r or "certificate" in r:                  # checked first: these errors also contain "tls:"
+        return "tls"
+    if "handshake failure" in r or "protocol version" in r or "no cipher" in r or "remote error: tls" in r:
+        return "handshake"
     if "connection reset" in r or "unexpected eof" in r or "eof" in r.split(":")[-1]:
         return "reset"
     if "connection refused" in r:
@@ -212,13 +248,38 @@ def classify_failure(reason, http_status):
         return "dns"
     if "timeout" in r or "deadline exceeded" in r:
         return "timeout"
-    if "x509" in r or "certificate" in r or "tls:" in r:
-        return "tls"
     if "network is unreachable" in r or "no route" in r:
         return "unreachable"
     if http_status and not reason:
         return "status"
     return "status" if http_status else "other"
+
+
+def set_mode(kind, target, mode):
+    if kind != "http":
+        raise ConfigError("Only websites have a check mode")
+    if mode not in HTTP_MODES:
+        raise ConfigError("Unknown mode")
+    target = str(target or "").strip()
+    with LOCK:
+        groups = _read_groups("http")
+        hit = False
+        for g in groups:
+            if target in g["targets"]:
+                labels = dict(g.get("labels") or {})
+                labels.pop("check_module", None)
+                if mode != "default":
+                    labels["check_module"] = HTTP_MODES[mode]
+                if len(g["targets"]) > 1:      # keep other targets of a shared group untouched
+                    g["targets"] = [t for t in g["targets"] if t != target]
+                    groups.append({"targets": [target], "labels": labels})
+                else:
+                    g["labels"] = labels
+                hit = True
+                break
+        if not hit:
+            raise ConfigError("Not found")
+        _write_groups("http", groups)
 
 
 def _legacy_items(text):

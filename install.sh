@@ -560,20 +560,21 @@ class BadRequest(ValueError):
 # ------------------------------------------------------------------ read API
 
 def api_containers(_q):
-    metrics = monitor.container_metrics()
+    metrics = monitor.container_metrics()          # keyed by short container id
+    by_name = {m["name"]: m for m in metrics.values() if m["name"]}
     now = time.time()
     if dockerapi.available():
         rows = []
         for c in dockerapi.list_containers():
-            m = metrics.get(c["name"], {})
+            m = metrics.get(c["id"]) or by_name.get(c["name"]) or {}
             running = c["state"] == "running"
             rows.append({**c, "cpu": m.get("cpu") if running else None, "mem": m.get("mem") if running else None,
                          "uptime": (now - m["started"]) if running and m.get("started") else None})
         return {"docker": True, "rows": rows}
     return {"docker": False, "rows": [
-        {"id": "", "name": n, "image": "", "state": "running", "status": "", "ports": [], "stack": False, "self": False,
-         "cpu": m["cpu"], "mem": m["mem"], "uptime": (now - m["started"]) if m.get("started") else None}
-        for n, m in sorted(metrics.items())]}
+        {"id": "", "name": m["name"] or cid, "image": "", "state": "running", "status": "", "ports": [], "stack": False,
+         "self": False, "cpu": m["cpu"], "mem": m["mem"], "uptime": (now - m["started"]) if m.get("started") else None}
+        for cid, m in sorted(metrics.items(), key=lambda kv: kv[1]["name"] or kv[0])]}
 
 
 def api_checks(_q):
@@ -1032,6 +1033,8 @@ def migrate_legacy():
 # ------------------------------------------------------------------ alert rules
 
 HOST_FS = 'fstype!~"tmpfs|overlay|squashfs"'
+DOCKER_CG = r'id=~".*docker[-/][a-f0-9]{64}(\\.scope)?"'   # see monitor.CG_DOCKER: match containers by id
+CONTAINER = "{{ if $labels.name }}{{ $labels.name }}{{ else }}{{ $labels.id }}{{ end }}"
 RULES = [
     {"name": "InstanceDown", "group": "host", "severity": "critical", "for": 2, "expr": "up == 0",
      "summary": "{{ $labels.job }} target {{ $labels.instance }} is down"},
@@ -1060,13 +1063,13 @@ RULES = [
      "t": {"default": 300, "unit": "s", "min": 60, "max": 3600},
      "summary": "{{ $labels.instance }} was rebooted recently"},
     {"name": "ContainerHighCpu", "group": "containers", "severity": "warning", "for": 10,
-     "expr": 'sum by (name) (rate(container_cpu_usage_seconds_total{name!=""}[5m])) * 100 > {t}',
+     "expr": f"sum by (id, name) (rate(container_cpu_usage_seconds_total{{{DOCKER_CG}}}[5m])) * 100 > {{t}}",
      "t": {"default": 90, "unit": "%", "min": 1, "max": 1000},
-     "summary": 'Container {{ $labels.name }} CPU is {{ $value | printf "%.0f" }}%'},
+     "summary": f'Container {CONTAINER} CPU is {{{{ $value | printf "%.0f" }}}}%'},
     {"name": "ContainerHighMemory", "group": "containers", "severity": "warning", "for": 10,
-     "expr": 'container_memory_working_set_bytes{name!=""} / (container_spec_memory_limit_bytes{name!=""} > 0) * 100 > {t}',
+     "expr": f"container_memory_working_set_bytes{{{DOCKER_CG}}} / (container_spec_memory_limit_bytes{{{DOCKER_CG}}} > 0) * 100 > {{t}}",
      "t": {"default": 90, "unit": "%", "min": 1, "max": 100},
-     "summary": 'Container {{ $labels.name }} memory is {{ $value | printf "%.0f" }}% of its limit'},
+     "summary": f'Container {CONTAINER} memory is {{{{ $value | printf "%.0f" }}}}% of its limit'},
     {"name": "EndpointDown", "group": "endpoints", "severity": "critical", "for": 2, "expr": "probe_success == 0",
      "summary": "{{ $labels.instance }} is unreachable"},
     {"name": "SslCertExpiringSoon", "group": "endpoints", "severity": "warning", "for": 60,
@@ -1766,7 +1769,7 @@ def api_overview(q):
             "rx": scalar(f"sum(rate(node_network_receive_bytes_total{{{nn},{VIRTUAL_NICS}}}[2m]))"),
             "tx": scalar(f"sum(rate(node_network_transmit_bytes_total{{{nn},{VIRTUAL_NICS}}}[2m]))"),
         },
-        "containers": scalar('count(count by (name) (container_memory_working_set_bytes{name!=""}))') or 0,
+        "containers": scalar(f"count(container_memory_working_set_bytes{{{CG_DOCKER}}})") or 0,
         "targets": {"up": scalar("sum(up)") or 0, "total": scalar("count(up)") or 0},
         "checks": {
             "up": scalar('sum(probe_success{job=~"blackbox.*"})') or 0,
@@ -1826,12 +1829,28 @@ def api_network(q):
     return out
 
 
+# cAdvisor's `name` label is missing on many Docker setups (containerd image store, cgroup v2), but the
+# `id` label always carries the 64-hex container id inside the cgroup path, so containers are matched by id.
+CG_DOCKER = r'id=~".*docker[-/][a-f0-9]{64}(\\.scope)?"'
+_CONTAINER_ID = re.compile(r"docker[-/]([a-f0-9]{64})")
+
+
+def _per_container(expr):
+    out = {}
+    for m, v in vector(expr):
+        hit = _CONTAINER_ID.search(m.get("id", ""))
+        if hit:
+            out[hit.group(1)[:12]] = (m.get("name", ""), v)
+    return out
+
+
 def container_metrics():
-    """CPU / memory / start time per container name, from cAdvisor."""
-    cpu = by_label('sum by (name) (rate(container_cpu_usage_seconds_total{name!=""}[2m])) * 100', "name")
-    mem = by_label('sum by (name) (container_memory_working_set_bytes{name!=""})', "name")
-    started = by_label('max by (name) (container_start_time_seconds{name!=""})', "name")
-    return {name: {"cpu": cpu.get(name), "mem": mem[name], "started": started.get(name)} for name in mem}
+    """CPU / memory / start time per container, keyed by the short (12 char) container id."""
+    cpu = _per_container(f"sum by (id, name) (rate(container_cpu_usage_seconds_total{{{CG_DOCKER}}}[2m])) * 100")
+    mem = _per_container(f"sum by (id, name) (container_memory_working_set_bytes{{{CG_DOCKER}}})")
+    started = _per_container(f"max by (id, name) (container_start_time_seconds{{{CG_DOCKER}}})")
+    return {cid: {"name": name, "cpu": cpu.get(cid, ("", None))[1], "mem": value, "started": started.get(cid, ("", None))[1]}
+            for cid, (name, value) in mem.items()}
 
 
 def api_websites(_q):

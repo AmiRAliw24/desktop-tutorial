@@ -220,6 +220,8 @@ def migrate_legacy():
 # ------------------------------------------------------------------ alert rules
 
 HOST_FS = 'fstype!~"tmpfs|overlay|squashfs"'
+DOCKER_CG = r'id=~".*docker[-/][a-f0-9]{64}(\\.scope)?"'   # see monitor.CG_DOCKER: match containers by id
+CONTAINER = "{{ if $labels.name }}{{ $labels.name }}{{ else }}{{ $labels.id }}{{ end }}"
 RULES = [
     {"name": "InstanceDown", "group": "host", "severity": "critical", "for": 2, "expr": "up == 0",
      "summary": "{{ $labels.job }} target {{ $labels.instance }} is down"},
@@ -248,13 +250,13 @@ RULES = [
      "t": {"default": 300, "unit": "s", "min": 60, "max": 3600},
      "summary": "{{ $labels.instance }} was rebooted recently"},
     {"name": "ContainerHighCpu", "group": "containers", "severity": "warning", "for": 10,
-     "expr": 'sum by (name) (rate(container_cpu_usage_seconds_total{name!=""}[5m])) * 100 > {t}',
+     "expr": f"sum by (id, name) (rate(container_cpu_usage_seconds_total{{{DOCKER_CG}}}[5m])) * 100 > {{t}}",
      "t": {"default": 90, "unit": "%", "min": 1, "max": 1000},
-     "summary": 'Container {{ $labels.name }} CPU is {{ $value | printf "%.0f" }}%'},
+     "summary": f'Container {CONTAINER} CPU is {{{{ $value | printf "%.0f" }}}}%'},
     {"name": "ContainerHighMemory", "group": "containers", "severity": "warning", "for": 10,
-     "expr": 'container_memory_working_set_bytes{name!=""} / (container_spec_memory_limit_bytes{name!=""} > 0) * 100 > {t}',
+     "expr": f"container_memory_working_set_bytes{{{DOCKER_CG}}} / (container_spec_memory_limit_bytes{{{DOCKER_CG}}} > 0) * 100 > {{t}}",
      "t": {"default": 90, "unit": "%", "min": 1, "max": 100},
-     "summary": 'Container {{ $labels.name }} memory is {{ $value | printf "%.0f" }}% of its limit'},
+     "summary": f'Container {CONTAINER} memory is {{{{ $value | printf "%.0f" }}}}% of its limit'},
     {"name": "EndpointDown", "group": "endpoints", "severity": "critical", "for": 2, "expr": "probe_success == 0",
      "summary": "{{ $labels.instance }} is unreachable"},
     {"name": "SslCertExpiringSoon", "group": "endpoints", "severity": "warning", "for": 60,

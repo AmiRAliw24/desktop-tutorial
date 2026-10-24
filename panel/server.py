@@ -68,20 +68,21 @@ class BadRequest(ValueError):
 # ------------------------------------------------------------------ read API
 
 def api_containers(_q):
-    metrics = monitor.container_metrics()
+    metrics = monitor.container_metrics()          # keyed by short container id
+    by_name = {m["name"]: m for m in metrics.values() if m["name"]}
     now = time.time()
     if dockerapi.available():
         rows = []
         for c in dockerapi.list_containers():
-            m = metrics.get(c["name"], {})
+            m = metrics.get(c["id"]) or by_name.get(c["name"]) or {}
             running = c["state"] == "running"
             rows.append({**c, "cpu": m.get("cpu") if running else None, "mem": m.get("mem") if running else None,
                          "uptime": (now - m["started"]) if running and m.get("started") else None})
         return {"docker": True, "rows": rows}
     return {"docker": False, "rows": [
-        {"id": "", "name": n, "image": "", "state": "running", "status": "", "ports": [], "stack": False, "self": False,
-         "cpu": m["cpu"], "mem": m["mem"], "uptime": (now - m["started"]) if m.get("started") else None}
-        for n, m in sorted(metrics.items())]}
+        {"id": "", "name": m["name"] or cid, "image": "", "state": "running", "status": "", "ports": [], "stack": False,
+         "self": False, "cpu": m["cpu"], "mem": m["mem"], "uptime": (now - m["started"]) if m.get("started") else None}
+        for cid, m in sorted(metrics.items(), key=lambda kv: kv[1]["name"] or kv[0])]}
 
 
 def api_checks(_q):

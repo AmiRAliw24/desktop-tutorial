@@ -99,7 +99,7 @@ def api_overview(q):
             "rx": scalar(f"sum(rate(node_network_receive_bytes_total{{{nn},{VIRTUAL_NICS}}}[2m]))"),
             "tx": scalar(f"sum(rate(node_network_transmit_bytes_total{{{nn},{VIRTUAL_NICS}}}[2m]))"),
         },
-        "containers": scalar('count(count by (name) (container_memory_working_set_bytes{name!=""}))') or 0,
+        "containers": scalar(f"count(container_memory_working_set_bytes{{{CG_DOCKER}}})") or 0,
         "targets": {"up": scalar("sum(up)") or 0, "total": scalar("count(up)") or 0},
         "checks": {
             "up": scalar('sum(probe_success{job=~"blackbox.*"})') or 0,
@@ -159,12 +159,28 @@ def api_network(q):
     return out
 
 
+# cAdvisor's `name` label is missing on many Docker setups (containerd image store, cgroup v2), but the
+# `id` label always carries the 64-hex container id inside the cgroup path, so containers are matched by id.
+CG_DOCKER = r'id=~".*docker[-/][a-f0-9]{64}(\\.scope)?"'
+_CONTAINER_ID = re.compile(r"docker[-/]([a-f0-9]{64})")
+
+
+def _per_container(expr):
+    out = {}
+    for m, v in vector(expr):
+        hit = _CONTAINER_ID.search(m.get("id", ""))
+        if hit:
+            out[hit.group(1)[:12]] = (m.get("name", ""), v)
+    return out
+
+
 def container_metrics():
-    """CPU / memory / start time per container name, from cAdvisor."""
-    cpu = by_label('sum by (name) (rate(container_cpu_usage_seconds_total{name!=""}[2m])) * 100', "name")
-    mem = by_label('sum by (name) (container_memory_working_set_bytes{name!=""})', "name")
-    started = by_label('max by (name) (container_start_time_seconds{name!=""})', "name")
-    return {name: {"cpu": cpu.get(name), "mem": mem[name], "started": started.get(name)} for name in mem}
+    """CPU / memory / start time per container, keyed by the short (12 char) container id."""
+    cpu = _per_container(f"sum by (id, name) (rate(container_cpu_usage_seconds_total{{{CG_DOCKER}}}[2m])) * 100")
+    mem = _per_container(f"sum by (id, name) (container_memory_working_set_bytes{{{CG_DOCKER}}})")
+    started = _per_container(f"max by (id, name) (container_start_time_seconds{{{CG_DOCKER}}})")
+    return {cid: {"name": name, "cpu": cpu.get(cid, ("", None))[1], "mem": value, "started": started.get(cid, ("", None))[1]}
+            for cid, (name, value) in mem.items()}
 
 
 def api_websites(_q):

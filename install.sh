@@ -269,7 +269,7 @@ __MONITORING_EOF__
 **مانیتورها:** نمای کلی، کانتینرها، سایت‌ها، دیسک‌ها، شبکه، تارگت‌ها، هشدارها.
 
 **مدیریت (همه از پنل):**
-- **سایت‌ها:** افزودن/حذف سایت (HTTP/HTTPS) و پورت TCP برای چک آپتایم، زمان پاسخ و انقضای SSL. دکمه‌ی ذره‌بین کنار هر ردیف چک را همان لحظه اجرا می‌کند و **دلیل ناموفق بودن** را به زبان ساده می‌گوید (قطع شدن handshake توسط سایت، پورت بسته، DNS، timeout، مشکل گواهی، کد خطای HTTP). برای سایتی که چک استاندارد را رد می‌کند، خودش حالت‌های دیگر (TLS قدیمی ۱.۰/۱.۱، نادیده گرفتن خطای گواهی، HTTP ساده، فقط اتصال TCP) را هم امتحان می‌کند و می‌گوید کدام کار می‌کند؛ با یک کلیک همان حالت برای مانیتور آن سایت فعال می‌شود (کنار آدرس برچسب حالت دیده می‌شود). اگر سایت فقط با HTTP ساده در دسترس باشد و HTTPS را برای این سرور رد کند، دکمه‌ی «مانیتور روی HTTP ساده» آدرس را (با حفظ نام) به `http://` تغییر می‌دهد.
+- **سایت‌ها:** افزودن/حذف سایت (HTTP/HTTPS) و پورت TCP برای چک آپتایم، زمان پاسخ و انقضای SSL. **رفع خودکار** (پیش‌فرض روشن): اگر سایتی که اضافه می‌کنید یا سایتی که ۵ دقیقه خراب بوده با چک استاندارد کار نکند، پنل خودش بهترین راه را پیدا و اعمال می‌کند: حالت TLS دیگر، یا صفحه‌ای که آدرس `http://` سایت به آن ریدایرکت می‌شود، یا خود `http://`. چکِ سالم هرگز تغییر نمی‌کند و سایتِ واقعاً خاموش دست‌نخورده می‌ماند. هر تغییر در بخش «Automatic adjustments» ثبت می‌شود و از تنظیمات قابل خاموش کردن است. دکمه‌ی ذره‌بین کنار هر ردیف چک را همان لحظه اجرا می‌کند و **دلیل ناموفق بودن** را به زبان ساده می‌گوید (قطع شدن handshake توسط سایت، پورت بسته، DNS، timeout، مشکل گواهی، کد خطای HTTP). برای سایتی که چک استاندارد را رد می‌کند، خودش حالت‌های دیگر (TLS قدیمی ۱.۰/۱.۱، نادیده گرفتن خطای گواهی، HTTP ساده، فقط اتصال TCP) را هم امتحان می‌کند و می‌گوید کدام کار می‌کند؛ با یک کلیک همان حالت برای مانیتور آن سایت فعال می‌شود (کنار آدرس برچسب حالت دیده می‌شود). اگر سایت فقط با HTTP ساده در دسترس باشد و HTTPS را برای این سرور رد کند، دکمه‌ی «مانیتور روی HTTP ساده» آدرس را (با حفظ نام) به `http://` تغییر می‌دهد.
 - **سرورها:** افزودن/حذف سرورهای دیگر (با `node_exporter`)؛ دستور نصب روی سرور مقصد را همان‌جا می‌دهد.
 - **کانتینرها:** شروع، توقف، ری‌استارت، دیدن لاگ، حذف و **ساخت کانتینر جدید** (ایمیج، پورت، متغیر محیطی، ولیوم، سیاست ری‌استارت).
 - **اعلان‌ها:** اتصال ربات تلگرام (با دکمه‌ی «پیدا کردن Chat ID»)، پیام آزمایشی و هشدار آزمایشی.
@@ -617,7 +617,7 @@ def api_containers(_q):
 
 
 def api_checks(_q):
-    return {k: store.list_targets(k) for k in store.KINDS}
+    return {**{k: store.list_targets(k) for k in store.KINDS}, "auto": {"enabled": store.auto_enabled(), "events": store.auto_events()}}
 
 
 def api_rules(_q):
@@ -625,7 +625,7 @@ def api_rules(_q):
 
 
 def api_settings(_q):
-    return {"user": auth.user, "version": VERSION,
+    return {"user": auth.user, "version": VERSION, "auto_fix": store.auto_enabled(),
             "docker": {"enabled": dockerapi.ENABLED, "available": dockerapi.available()},
             "telegram": store.telegram_status()}
 
@@ -661,6 +661,18 @@ def post_checks_mode(b, _h):
 
 def post_checks_replace(b, _h):
     store.replace_target(b.get("kind"), b.get("target"), b.get("new_target"))
+    return {"ok": True}
+
+
+def post_checks_autofix(b, _h):
+    target = str(b.get("target", "")).strip()
+    if not any(r["target"] == target for r in store.list_targets("http")):
+        raise store.ConfigError("Only monitored addresses can be fixed")
+    return {"ok": True, "event": store.auto_fix(target)}
+
+
+def post_auto_setting(b, _h):
+    store.set_auto_enabled(b.get("enabled", True))
     return {"ok": True}
 
 
@@ -713,7 +725,7 @@ def post_password(b, h):
 
 
 POST_API = {
-    "/api/checks/add": post_checks_add, "/api/checks/remove": post_checks_remove, "/api/checks/probe": post_checks_probe, "/api/checks/mode": post_checks_mode, "/api/checks/replace": post_checks_replace,
+    "/api/checks/add": post_checks_add, "/api/checks/remove": post_checks_remove, "/api/checks/probe": post_checks_probe, "/api/checks/mode": post_checks_mode, "/api/checks/replace": post_checks_replace, "/api/checks/autofix": post_checks_autofix, "/api/settings/auto": post_auto_setting,
     "/api/telegram/save": post_telegram_save, "/api/telegram/test": post_telegram_test,
     "/api/telegram/chats": post_telegram_chats, "/api/telegram/remove": post_telegram_remove,
     "/api/alerts/test": post_alert_test, "/api/rules/set": post_rules_set, "/api/rules/reset": post_rules_reset,
@@ -855,6 +867,7 @@ def main():
         store.bootstrap()
     except OSError as e:
         print(f"WARNING: cannot prepare configuration files ({e}). {WRITE_HINT}", flush=True)
+    threading.Thread(target=store.auto_loop, daemon=True).start()
     print(f"panel {VERSION} listening on :{PORT}, prometheus at {monitor.PROM}, docker control "
           f"{'on' if dockerapi.ENABLED else 'off'}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
@@ -881,7 +894,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 CONFIG = Path(os.environ.get("CONFIG_DIR", "/config"))
@@ -1009,7 +1022,8 @@ def list_targets(kind):
         for t in g["targets"]:
             rows.append({"target": t, "name": labels.get("name") or labels.get("instance_name") or "",
                          "locked": kind == "nodes" and t == LOCAL_NODE,
-                         "mode": MODE_BY_MODULE.get(labels.get("check_module", ""), "default") if kind == "http" else "default"})
+                         "mode": MODE_BY_MODULE.get(labels.get("check_module", ""), "default") if kind == "http" else "default",
+                         "auto_from": labels.get("auto_from", "")})
     return rows
 
 
@@ -1031,6 +1045,8 @@ def add_target(kind, target, name=""):
         label = "instance_name" if kind == "nodes" else "name"
         groups.append({"targets": [target], "labels": {label: name} if name else {}})
         _write_groups(kind, groups)
+    if kind == "http":
+        auto_fix_async(target)
 
 
 def remove_target(kind, target):
@@ -1064,8 +1080,37 @@ def _blackbox(module, target):
         if m:
             reason = m.group(1).replace('\\"', '"')
             break
+    redirects = [m.group(1).strip('"') for m in re.finditer(r'msg="Received redirect" location=("(?:[^"\\]|\\.)*"|\S+)', text)]
     return {"ok": ok, "reason": reason, "kind": "" if ok else classify_failure(reason, http_status), "http_status": http_status,
-            "log": "\n".join(l for l in text.splitlines() if not l.startswith("#"))[-20000:]}
+            "redirects": redirects, "log": "\n".join(l for l in text.splitlines() if not l.startswith("#"))[-20000:]}
+
+
+def final_url(start, redirects):
+    """Where a chain of (possibly relative) redirects ends. Empty if there were none."""
+    url = start
+    for location in redirects:
+        url = urljoin(url, location)
+    return url if redirects else ""
+
+
+def _variant_plan(target, mode):
+    """Other ways to check the same website: (id, blackbox module, address to probe)."""
+    parsed = urlparse(target)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    host = f"[{parsed.hostname}]" if ":" in (parsed.hostname or "") else parsed.hostname
+    plan = [(m, HTTP_MODES[m], target) for m in HTTP_MODES if m != mode]
+    if parsed.scheme == "https":
+        plan.append(("plain_http", "http_2xx", "http://" + target[len("https://"):]))
+    plan.append(("tcp", "tcp_connect", f"{host}:{port}"))
+    return plan
+
+
+def _run_variants(target, mode):
+    """Probe every variant in parallel. Returns [(id, probed address, result)]."""
+    plan = _variant_plan(target, mode)
+    with ThreadPoolExecutor(max_workers=len(plan)) as pool:
+        outcomes = list(pool.map(lambda p: _blackbox(p[1], p[2]), plan))
+    return [(vid, vtarget, out) for (vid, _module, vtarget), out in zip(plan, outcomes)]
 
 
 def probe_debug(kind, target):
@@ -1083,18 +1128,10 @@ def probe_debug(kind, target):
     result["variants"], result["suggest"] = [], ""
     if result["ok"] or kind != "http":
         return result
-
-    parsed = urlparse(target)
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    host = f"[{parsed.hostname}]" if ":" in (parsed.hostname or "") else parsed.hostname
-    plan = [(m, HTTP_MODES[m], target) for m in HTTP_MODES if m != mode]
-    if parsed.scheme == "https":
-        plan.append(("plain_http", "http_2xx", "http://" + target[len("https://"):]))
-    plan.append(("tcp", "tcp_connect", f"{host}:{port}"))
-    with ThreadPoolExecutor(max_workers=len(plan)) as pool:
-        outcomes = list(pool.map(lambda p: _blackbox(p[1], p[2]), plan))
-    for (vid, _module, _target), out in zip(plan, outcomes):
-        result["variants"].append({"id": vid, "ok": out["ok"], "reason": out["reason"], "kind": out["kind"], "http_status": out["http_status"]})
+    for vid, vtarget, out in _run_variants(target, mode):
+        result["variants"].append({"id": vid, "ok": out["ok"], "reason": out["reason"], "kind": out["kind"],
+                                   "http_status": out["http_status"],
+                                   "final_url": final_url(vtarget, out["redirects"]) if vid == "plain_http" else ""})
     result["suggest"] = next((v["id"] for v in result["variants"] if v["ok"] and v["id"] in HTTP_MODES), "")
     return result
 
@@ -1121,7 +1158,7 @@ def classify_failure(reason, http_status):
     return "status" if http_status else "other"
 
 
-def replace_target(kind, old, new):
+def replace_target(kind, old, new, extra_labels=None):
     """Swap one address for another, keeping its name (e.g. to monitor a site over http:// instead of https://)."""
     new = validate_target(kind, new)
     old = str(old or "").strip()
@@ -1133,6 +1170,7 @@ def replace_target(kind, old, new):
         if old != new and any(new in g["targets"] for g in groups):
             raise ConfigError("This address is already being monitored")
         labels = {k: v for k, v in (match.get("labels") or {}).items() if k != "check_module"}   # new address: standard check
+        labels.update(extra_labels or {})
         rest = [{**g, "targets": [t for t in g["targets"] if t != old]} for g in groups]
         rest = [g for g in rest if g["targets"]]
         rest.append({"targets": [new], "labels": labels})
@@ -1164,6 +1202,116 @@ def set_mode(kind, target, mode):
         if not hit:
             raise ConfigError("Not found")
         _write_groups("http", groups)
+
+
+# ------------------------------------------------------------------ automatic fixing of failing websites
+
+AUTO_COOLDOWN = 1800          # seconds between automatic attempts for the same address
+_auto_last, _auto_busy = {}, set()
+SECURE_MODES = ("legacy_tls", "no_verify", "legacy_no_verify")
+
+
+def auto_enabled():
+    return bool(load_settings().get("auto_fix", True))
+
+
+def set_auto_enabled(enabled):
+    with LOCK:
+        s = load_settings()
+        s["auto_fix"] = bool(enabled)
+        save_settings(s)
+
+
+def auto_events(limit=10):
+    return list(reversed(load_settings().get("auto_events", [])[-limit:]))
+
+
+def _record_event(**event):
+    with LOCK:
+        s = load_settings()
+        s["auto_events"] = (s.get("auto_events", []) + [{"t": int(time.time()), **event}])[-30:]
+        save_settings(s)
+
+
+def auto_fix(target):
+    """Find the best way to monitor a website that fails its standard check, and apply it.
+
+    Never touches a check that currently passes. Order of preference: another TLS mode on the same
+    address, then the address the site's plain http:// version finally redirects to (if that passes a
+    standard check), then the plain http:// address itself. Returns the recorded event or None."""
+    row = next((r for r in list_targets("http") if r["target"] == target), None)
+    if row is None:
+        return None
+    if _blackbox(HTTP_MODES[row["mode"]], target)["ok"]:
+        return None
+    outcomes = _run_variants(target, row["mode"])
+    ok = {vid: (vtarget, out) for vid, vtarget, out in outcomes if out["ok"]}
+    mode = next((m for m in SECURE_MODES if m in ok), None)
+    if mode:
+        set_mode("http", target, mode)
+        event = {"action": "mode", "from": target, "mode": mode}
+    elif "plain_http" in ok:
+        plain_url, out = ok["plain_http"]
+        new = plain_url
+        landing = final_url(plain_url, out["redirects"])
+        if landing.startswith("https://") and landing != target and _blackbox("http_2xx", landing)["ok"]:
+            new = landing                                   # the page users really reach, with its real certificate
+        event = {"action": "replace", "from": target, "to": new}
+        existing = {r["target"] for r in list_targets("http")}
+        if new in existing:                                 # already monitored: the failing entry is just a duplicate
+            remove_target("http", target)
+            event["action"] = "merge"
+        else:
+            replace_target("http", target, new, {"auto_from": target})
+    else:
+        return None
+    _record_event(**event)
+    return event
+
+
+def auto_fix_async(target):
+    """Run auto_fix in the background right after a site is added."""
+    if not auto_enabled():
+        return
+
+    def run():
+        try:
+            _auto_last[target] = time.time()
+            auto_fix(target)
+        except Exception:        # background helper: a failure must never break adding a site
+            pass
+        finally:
+            _auto_busy.discard(target)
+
+    if target not in _auto_busy:
+        _auto_busy.add(target)
+        threading.Thread(target=run, daemon=True).start()
+
+
+def auto_scan():
+    """Called periodically: fix websites that have failed for the last five minutes."""
+    if not auto_enabled():
+        return
+    import monitor
+    down = {m.get("instance", "") for m, _ in monitor.vector('min_over_time(probe_success{job="blackbox-http"}[5m]) == 0')}
+    managed = {r["target"] for r in list_targets("http")}
+    for target in sorted(down & managed):
+        if time.time() - _auto_last.get(target, 0) >= AUTO_COOLDOWN and target not in _auto_busy:
+            _auto_last[target] = time.time()
+            try:
+                auto_fix(target)
+            except Exception:
+                pass
+
+
+def auto_loop():
+    time.sleep(90)
+    while True:
+        try:
+            auto_scan()
+        except Exception:
+            pass
+        time.sleep(300)
 
 
 def _legacy_items(text):
@@ -2349,9 +2497,17 @@ __MONITORING_EOF__
       diag_applied: "Check mode changed. The status updates within a minute.", mode_default: "standard",
       mode_legacy_tls: "old TLS", mode_no_verify: "no certificate check", mode_legacy_no_verify: "old TLS, no certificate check",
       diag_blocked: "The port accepts connections but every secure variant is rejected: the site or its firewall refuses this server specifically (typical for IP/geo blocking).",
-      diag_plain: "Plain HTTP works, but every secure (HTTPS) attempt is rejected, whatever the TLS mode. The site is up; its HTTPS side refuses this server. You can monitor it over plain HTTP instead (the certificate expiry then cannot be checked).",
+      diag_plain: "Plain HTTP works, but every secure (HTTPS) attempt is rejected, whatever the TLS mode. The site is up; its HTTPS side refuses this server. You can monitor it over plain HTTP instead (if that address redirects to an HTTPS page, that page's certificate is still checked).",
       diag_use_http: "Monitor over plain HTTP instead", diag_replaced: "Now monitoring the plain HTTP address.",
       diag_closed: "Even a plain TCP connection fails: the address is unreachable from this server (down, wrong port, or blocked).",
+      auto_title: "Automatic fixing of failing websites",
+      auto_text: "When a website keeps failing, the panel tries other ways to check it (old TLS, ignoring certificate errors, the page its http:// address redirects to, plain http://) and switches to the first one that works. A check that works is never changed. Turn it off to keep your addresses exactly as typed.",
+      auto_on: "Fix failing websites automatically", auto_off_saved: "Automatic fixing is off", auto_on_saved: "Automatic fixing is on",
+      auto_log: "Automatic adjustments", auto_tag: "auto", auto_was: "was {from}",
+      auto_ev_replace: "{from} is now monitored as {to}", auto_ev_mode: "{from} is now checked with: {mode}", auto_ev_merge: "{from} was removed: {to} is already monitored",
+      auto_fix_btn: "Fix automatically", auto_done: "Done. The status updates within a minute.",
+      auto_none: "Nothing better was found: no other way of checking this address works from the server.",
+      added_auto: "Added. The panel is choosing the best way to monitor it automatically.", redirects_to: "redirects to",
       probe_hint: "If the address opens in your browser but fails here, the server's IP is probably blocked by the site or its network (common for sites hosted in Iran when the monitoring server is abroad), or the server has no route to it. Monitoring shows what the server sees, not what you see.",
       s_wait: "Waiting", w_confirm_remove: "Stop monitoring {n}?", w_hint: "New entries show \"Waiting\" until the first check completes (about a minute).",
       add_server: "Add server", f_srv_addr: "Server address", f_srv_hint: "IP or hostname with the node_exporter port, for example 203.0.113.10:9100",
@@ -2460,9 +2616,17 @@ __MONITORING_EOF__
       diag_applied: "حالت چک عوض شد. وضعیت تا یک دقیقه‌ی دیگر بروز می‌شود.", mode_default: "استاندارد",
       mode_legacy_tls: "TLS قدیمی", mode_no_verify: "بدون بررسی گواهی", mode_legacy_no_verify: "TLS قدیمی، بدون بررسی گواهی",
       diag_blocked: "پورت اتصال را می‌پذیرد ولی همه‌ی حالت‌های امن رد می‌شوند: سایت یا فایروالش مشخصاً این سرور را رد می‌کند (معمول در مسدودسازی IP یا جغرافیایی).",
-      diag_plain: "HTTP ساده کار می‌کند ولی هر تلاش امن (HTTPS) با هر حالت TLS رد می‌شود. سایت بالاست؛ بخش HTTPS آن این سرور را رد می‌کند. می‌توانید به‌جای آن روی HTTP ساده مانیتورش کنید (تاریخ انقضای گواهی دیگر چک نمی‌شود).",
+      diag_plain: "HTTP ساده کار می‌کند ولی هر تلاش امن (HTTPS) با هر حالت TLS رد می‌شود. سایت بالاست؛ بخش HTTPS آن این سرور را رد می‌کند. می‌توانید به‌جای آن روی HTTP ساده مانیتورش کنید (اگر آن آدرس به یک صفحه‌ی HTTPS ریدایرکت شود، گواهی همان صفحه همچنان چک می‌شود).",
       diag_use_http: "مانیتور روی HTTP ساده", diag_replaced: "حالا آدرس HTTP ساده مانیتور می‌شود.",
       diag_closed: "حتی اتصال ساده‌ی TCP هم ناموفق است: آدرس از این سرور در دسترس نیست (خاموش، پورت اشتباه یا مسدود).",
+      auto_title: "رفع خودکار سایت‌های خراب",
+      auto_text: "وقتی سایتی مدام ناموفق است، پنل راه‌های دیگر چک را امتحان می‌کند (TLS قدیمی، نادیده گرفتن خطای گواهی، صفحه‌ای که آدرس http:// به آن ریدایرکت می‌شود، HTTP ساده) و روی اولین راهی که کار کند می‌رود. چکِ سالم هرگز تغییر نمی‌کند. برای اینکه آدرس‌ها دقیقاً همان‌طور که وارد کردید بمانند، خاموشش کنید.",
+      auto_on: "سایت‌های خراب را خودکار درست کن", auto_off_saved: "رفع خودکار خاموش شد", auto_on_saved: "رفع خودکار روشن شد",
+      auto_log: "تنظیمات خودکار", auto_tag: "خودکار", auto_was: "قبلاً {from}",
+      auto_ev_replace: "{from} حالا به‌صورت {to} مانیتور می‌شود", auto_ev_mode: "{from} حالا با این حالت چک می‌شود: {mode}", auto_ev_merge: "{from} حذف شد: {to} از قبل مانیتور می‌شود",
+      auto_fix_btn: "رفع خودکار", auto_done: "انجام شد. وضعیت تا یک دقیقه‌ی دیگر بروز می‌شود.",
+      auto_none: "راه بهتری پیدا نشد: هیچ راه دیگری برای چک این آدرس از سرور کار نمی‌کند.",
+      added_auto: "اضافه شد. پنل خودکار بهترین راه مانیتور آن را انتخاب می‌کند.", redirects_to: "ریدایرکت می‌شود به",
       probe_hint: "اگر آدرس در مرورگر شما باز می‌شود ولی اینجا ناموفق است، احتمالاً IP سرور توسط سایت یا شبکه‌اش مسدود است (برای سایت‌های میزبانی‌شده در ایران وقتی سرور مانیتورینگ خارج از ایران است رایج است) یا سرور مسیری به آن ندارد. مانیتورینگ همان چیزی را نشان می‌دهد که «سرور» می‌بیند، نه آنچه شما می‌بینید.",
       s_wait: "در انتظار", w_confirm_remove: "نظارت بر {n} متوقف شود؟", w_hint: "موارد جدید تا تکمیل اولین چک (حدود یک دقیقه) «در انتظار» نشان داده می‌شوند.",
       add_server: "افزودن سرور", f_srv_addr: "آدرس سرور", f_srv_hint: "آی‌پی یا نام سرور همراه پورت node_exporter، مثل 203.0.113.10:9100",
@@ -2836,7 +3000,7 @@ __MONITORING_EOF__
         const extra = metrics.filter((m) => !known.has(m.target)).map((m) => ({ target: m.target, name: "", kind: m.job === "tcp" ? "tcp" : "http", fixed: true }));
         const rows = [...managed, ...extra].map((r) => ({ ...r, m: byTarget.get(r.target) }));
         const cols = [
-          { h: "target", cls: "strong", cell: (r) => `${num(esc(r.target))}${r.mode && r.mode !== "default" ? `<span class="tag">${esc(t("mode_" + r.mode))}</span>` : ""}${r.name ? `<div class="sub-line">${esc(r.name)}</div>` : ""}` },
+          { h: "target", cls: "strong", cell: (r) => `${num(esc(r.target))}${r.mode && r.mode !== "default" ? `<span class="tag">${esc(t("mode_" + r.mode))}</span>` : ""}${r.auto_from ? `<span class="tag" title="${esc(t("auto_was", { from: r.auto_from }))}">${esc(t("auto_tag"))}</span>` : ""}${r.name ? `<div class="sub-line">${esc(r.name)}</div>` : ""}` },
           { h: "type", cell: (r) => pill("info", r.kind.toUpperCase(), false) },
           { h: "status", cell: (r) => statusPill(r.m && r.m.up, !!r.m) },
           { h: "response", cell: (r) => num(r.m ? fmtMs(r.m.duration) : "–") },
@@ -2844,7 +3008,10 @@ __MONITORING_EOF__
           { h: "ssl_h", cell: (r) => (!r.m || r.m.ssl_days == null ? "–" : pill(r.m.ssl_days < 7 ? "bad" : r.m.ssl_days < 14 ? "warn" : "ok", nf(r.m.ssl_days, 0), false)) },
           { h: "actions", cell: (r) => `<div class="row-actions">${btnIcon("search", t("probe"), `data-act="probe" data-kind="${r.kind}" data-target="${esc(r.target)}"`)}${r.fixed ? "" : btnIcon("trash", t("remove"), `data-act="del" data-kind="${r.kind}" data-target="${esc(r.target)}"`, "danger")}</div>` },
         ];
-        return { html: table(cols, rows) + `<p class="muted" style="margin-top:12px">${esc(t("w_hint"))}</p>`, tools: addButton("btn-add-site", t("add_site")) };
+        const events = (checks.auto && checks.auto.events) || [];
+        const evText = (e) => (e.action === "mode" ? t("auto_ev_mode", { from: e.from, mode: t("mode_" + e.mode) }) : e.action === "merge" ? t("auto_ev_merge", { from: e.from, to: e.to }) : t("auto_ev_replace", { from: e.from, to: e.to }));
+        const log = events.length ? `<div class="subcard" style="margin-top:18px"><h3>${icon("check")}${esc(t("auto_log"))}</h3><ul class="steps">${events.slice(0, 5).map((e) => `<li><span class="muted">${esc(new Date(e.t * 1000).toLocaleString())}</span> · ${esc(evText(e))}</li>`).join("")}</ul></div>` : "";
+        return { html: table(cols, rows) + `<p class="muted" style="margin-top:12px">${esc(t("w_hint"))}</p>` + log, tools: addButton("btn-add-site", t("add_site")) };
       },
       bind(root) {
         $("btn-add-site")?.addEventListener("click", addSiteDialog);
@@ -3060,11 +3227,18 @@ __MONITORING_EOF__
           <div style="display:grid;gap:16px">
             <section class="subcard"><h3>${icon("box")}${esc(t("st_docker_title"))} ${dockerPill}</h3>
               <p>${esc(d.enabled ? t("st_docker_hint_on") : t("st_docker_hint_off"))}</p></section>
+            <section class="subcard"><h3>${icon("check")}${esc(t("auto_title"))}</h3><p>${esc(t("auto_text"))}</p>
+              <label style="display:flex;align-items:center;gap:12px;cursor:pointer"><span class="switch"><input type="checkbox" id="auto-toggle" ${s.auto_fix ? "checked" : ""}><span></span></span><b>${esc(t("auto_on"))}</b></label></section>
             <section class="subcard"><h3>${icon("server")}${esc(t("st_about"))}</h3>
               <p>${esc(t("st_version"))}: ${num(esc(s.version))}</p></section></div></div>`;
         return { html, tools: "" };
       },
       bind(root) {
+        root.querySelector("#auto-toggle").addEventListener("change", async (e) => {
+          const on = e.currentTarget.checked;
+          if (await act(e.currentTarget, () => post("/api/settings/auto", { enabled: on }), t(on ? "auto_on_saved" : "auto_off_saved"))) state.settings = { ...state.settings, auto_fix: on };
+          else e.currentTarget.checked = !on;
+        });
         const form = root.querySelector("#pw-form");
         form.addEventListener("submit", async (e) => {
           e.preventDefault();
@@ -3120,11 +3294,13 @@ __MONITORING_EOF__
               const label = t(v.id === "tcp" ? "v_tcp" : `v_${v.id}`);
               const apply = v.ok && v.id in { legacy_tls: 1, no_verify: 1, legacy_no_verify: 1 }
                 ? `<button type="button" class="btn small primary" data-mode="${v.id}">${esc(t("diag_apply"))}</button>` : "";
-              return `<tr><td>${v.ok ? pill("ok", t("diag_works")) : pill("bad", t("diag_fails"))}</td><td class="strong" style="white-space:normal">${esc(label)}${apply ? `<div style="margin-top:8px">${apply}</div>` : ""}</td><td class="wrap-cell muted" style="min-width:300px">${v.ok ? "" : `<code class="reason">${esc(v.reason)}</code>`}</td></tr>`;
+              return `<tr><td>${v.ok ? pill("ok", t("diag_works")) : pill("bad", t("diag_fails"))}</td><td class="strong" style="white-space:normal">${esc(label)}${apply ? `<div style="margin-top:8px">${apply}</div>` : ""}</td><td class="wrap-cell muted" style="min-width:300px">${v.ok ? (v.final_url ? `${esc(t("redirects_to"))} <code class="reason">${esc(v.final_url)}</code>` : "") : `<code class="reason">${esc(v.reason)}</code>`}</td></tr>`;
             }).join("");
             const httpFix = !secureOk && by.plain_http && by.plain_http.ok && target.startsWith("https://")
               ? `<p><button type="button" class="btn small primary" data-replace="http://${esc(target.slice(8))}">${esc(t("diag_use_http"))}</button></p>` : "";
-            diag = `<h4 style="margin:18px 0 8px">${esc(t("diag_title"))}</h4><p class="muted">${esc(note)}</p>${httpFix}<div class="table-wrap"><table><tbody>${rows}</tbody></table></div>`;
+            const autoBtn = r.variants.some((v) => v.ok && (v.id in { legacy_tls: 1, no_verify: 1, legacy_no_verify: 1 } || v.id === "plain_http"))
+              ? `<p><button type="button" class="btn primary" data-autofix>${esc(t("auto_fix_btn"))}</button></p>` : "";
+            diag = `<h4 style="margin:18px 0 8px">${esc(t("diag_title"))}</h4>${autoBtn}<p class="muted">${esc(note)}</p>${httpFix}<div class="table-wrap"><table><tbody>${rows}</tbody></table></div>`;
           }
           out.innerHTML = `<div class="notice ${r.ok ? "ok" : "bad"}">${icon(r.ok ? "okmark" : "bell")}<span><b>${esc(t(r.ok ? "probe_ok" : "probe_fail"))}</b>${status}</span></div>
             ${r.ok ? "" : `<p>${esc(t("probe_k_" + (r.kind || "other")))}</p>`}
@@ -3132,6 +3308,12 @@ __MONITORING_EOF__
             ${diag}
             ${r.ok ? "" : `<p class="muted">${esc(t("probe_hint"))}</p>`}
             <details><summary>${esc(t("probe_log"))}</summary><pre class="logs" style="height:280px;margin-top:10px">${esc(r.log)}</pre></details>`;
+          out.querySelectorAll("[data-autofix]").forEach((b) => b.addEventListener("click", async () => {
+            const res = await act(b, () => post("/api/checks/autofix", { target }));
+            if (!res) return;
+            toast(res.event ? t("auto_done") : t("auto_none"), res.event ? "" : "warn");
+            dlg.close(); renderView(false);
+          }));
           out.querySelectorAll("[data-replace]").forEach((b) => b.addEventListener("click", async () => {
             if (await act(b, () => post("/api/checks/replace", { kind, target, new_target: b.dataset.replace }), t("diag_replaced"))) { dlg.close(); renderView(false); }
           }));
@@ -3189,7 +3371,7 @@ __MONITORING_EOF__
         const kind = val(form, "kind");
         if (kind === "http" && target && !/^[a-z][a-z0-9+.-]*:\/\//i.test(target)) target = `https://${target}`;  // only when no scheme was typed
         await post("/api/checks/add", { kind, target, name: val(form, "name").trim() });
-        toast(t("added"));
+        toast(kind === "http" && state.settings && state.settings.auto_fix ? t("added_auto") : t("added"));
         renderView(false);
       },
     });

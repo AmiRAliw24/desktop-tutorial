@@ -15,7 +15,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 CONFIG = Path(os.environ.get("CONFIG_DIR", "/config"))
@@ -143,7 +143,8 @@ def list_targets(kind):
         for t in g["targets"]:
             rows.append({"target": t, "name": labels.get("name") or labels.get("instance_name") or "",
                          "locked": kind == "nodes" and t == LOCAL_NODE,
-                         "mode": MODE_BY_MODULE.get(labels.get("check_module", ""), "default") if kind == "http" else "default"})
+                         "mode": MODE_BY_MODULE.get(labels.get("check_module", ""), "default") if kind == "http" else "default",
+                         "auto_from": labels.get("auto_from", "")})
     return rows
 
 
@@ -165,6 +166,8 @@ def add_target(kind, target, name=""):
         label = "instance_name" if kind == "nodes" else "name"
         groups.append({"targets": [target], "labels": {label: name} if name else {}})
         _write_groups(kind, groups)
+    if kind == "http":
+        auto_fix_async(target)
 
 
 def remove_target(kind, target):
@@ -198,8 +201,37 @@ def _blackbox(module, target):
         if m:
             reason = m.group(1).replace('\\"', '"')
             break
+    redirects = [m.group(1).strip('"') for m in re.finditer(r'msg="Received redirect" location=("(?:[^"\\]|\\.)*"|\S+)', text)]
     return {"ok": ok, "reason": reason, "kind": "" if ok else classify_failure(reason, http_status), "http_status": http_status,
-            "log": "\n".join(l for l in text.splitlines() if not l.startswith("#"))[-20000:]}
+            "redirects": redirects, "log": "\n".join(l for l in text.splitlines() if not l.startswith("#"))[-20000:]}
+
+
+def final_url(start, redirects):
+    """Where a chain of (possibly relative) redirects ends. Empty if there were none."""
+    url = start
+    for location in redirects:
+        url = urljoin(url, location)
+    return url if redirects else ""
+
+
+def _variant_plan(target, mode):
+    """Other ways to check the same website: (id, blackbox module, address to probe)."""
+    parsed = urlparse(target)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    host = f"[{parsed.hostname}]" if ":" in (parsed.hostname or "") else parsed.hostname
+    plan = [(m, HTTP_MODES[m], target) for m in HTTP_MODES if m != mode]
+    if parsed.scheme == "https":
+        plan.append(("plain_http", "http_2xx", "http://" + target[len("https://"):]))
+    plan.append(("tcp", "tcp_connect", f"{host}:{port}"))
+    return plan
+
+
+def _run_variants(target, mode):
+    """Probe every variant in parallel. Returns [(id, probed address, result)]."""
+    plan = _variant_plan(target, mode)
+    with ThreadPoolExecutor(max_workers=len(plan)) as pool:
+        outcomes = list(pool.map(lambda p: _blackbox(p[1], p[2]), plan))
+    return [(vid, vtarget, out) for (vid, _module, vtarget), out in zip(plan, outcomes)]
 
 
 def probe_debug(kind, target):
@@ -217,18 +249,10 @@ def probe_debug(kind, target):
     result["variants"], result["suggest"] = [], ""
     if result["ok"] or kind != "http":
         return result
-
-    parsed = urlparse(target)
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    host = f"[{parsed.hostname}]" if ":" in (parsed.hostname or "") else parsed.hostname
-    plan = [(m, HTTP_MODES[m], target) for m in HTTP_MODES if m != mode]
-    if parsed.scheme == "https":
-        plan.append(("plain_http", "http_2xx", "http://" + target[len("https://"):]))
-    plan.append(("tcp", "tcp_connect", f"{host}:{port}"))
-    with ThreadPoolExecutor(max_workers=len(plan)) as pool:
-        outcomes = list(pool.map(lambda p: _blackbox(p[1], p[2]), plan))
-    for (vid, _module, _target), out in zip(plan, outcomes):
-        result["variants"].append({"id": vid, "ok": out["ok"], "reason": out["reason"], "kind": out["kind"], "http_status": out["http_status"]})
+    for vid, vtarget, out in _run_variants(target, mode):
+        result["variants"].append({"id": vid, "ok": out["ok"], "reason": out["reason"], "kind": out["kind"],
+                                   "http_status": out["http_status"],
+                                   "final_url": final_url(vtarget, out["redirects"]) if vid == "plain_http" else ""})
     result["suggest"] = next((v["id"] for v in result["variants"] if v["ok"] and v["id"] in HTTP_MODES), "")
     return result
 
@@ -255,7 +279,7 @@ def classify_failure(reason, http_status):
     return "status" if http_status else "other"
 
 
-def replace_target(kind, old, new):
+def replace_target(kind, old, new, extra_labels=None):
     """Swap one address for another, keeping its name (e.g. to monitor a site over http:// instead of https://)."""
     new = validate_target(kind, new)
     old = str(old or "").strip()
@@ -267,6 +291,7 @@ def replace_target(kind, old, new):
         if old != new and any(new in g["targets"] for g in groups):
             raise ConfigError("This address is already being monitored")
         labels = {k: v for k, v in (match.get("labels") or {}).items() if k != "check_module"}   # new address: standard check
+        labels.update(extra_labels or {})
         rest = [{**g, "targets": [t for t in g["targets"] if t != old]} for g in groups]
         rest = [g for g in rest if g["targets"]]
         rest.append({"targets": [new], "labels": labels})
@@ -298,6 +323,116 @@ def set_mode(kind, target, mode):
         if not hit:
             raise ConfigError("Not found")
         _write_groups("http", groups)
+
+
+# ------------------------------------------------------------------ automatic fixing of failing websites
+
+AUTO_COOLDOWN = 1800          # seconds between automatic attempts for the same address
+_auto_last, _auto_busy = {}, set()
+SECURE_MODES = ("legacy_tls", "no_verify", "legacy_no_verify")
+
+
+def auto_enabled():
+    return bool(load_settings().get("auto_fix", True))
+
+
+def set_auto_enabled(enabled):
+    with LOCK:
+        s = load_settings()
+        s["auto_fix"] = bool(enabled)
+        save_settings(s)
+
+
+def auto_events(limit=10):
+    return list(reversed(load_settings().get("auto_events", [])[-limit:]))
+
+
+def _record_event(**event):
+    with LOCK:
+        s = load_settings()
+        s["auto_events"] = (s.get("auto_events", []) + [{"t": int(time.time()), **event}])[-30:]
+        save_settings(s)
+
+
+def auto_fix(target):
+    """Find the best way to monitor a website that fails its standard check, and apply it.
+
+    Never touches a check that currently passes. Order of preference: another TLS mode on the same
+    address, then the address the site's plain http:// version finally redirects to (if that passes a
+    standard check), then the plain http:// address itself. Returns the recorded event or None."""
+    row = next((r for r in list_targets("http") if r["target"] == target), None)
+    if row is None:
+        return None
+    if _blackbox(HTTP_MODES[row["mode"]], target)["ok"]:
+        return None
+    outcomes = _run_variants(target, row["mode"])
+    ok = {vid: (vtarget, out) for vid, vtarget, out in outcomes if out["ok"]}
+    mode = next((m for m in SECURE_MODES if m in ok), None)
+    if mode:
+        set_mode("http", target, mode)
+        event = {"action": "mode", "from": target, "mode": mode}
+    elif "plain_http" in ok:
+        plain_url, out = ok["plain_http"]
+        new = plain_url
+        landing = final_url(plain_url, out["redirects"])
+        if landing.startswith("https://") and landing != target and _blackbox("http_2xx", landing)["ok"]:
+            new = landing                                   # the page users really reach, with its real certificate
+        event = {"action": "replace", "from": target, "to": new}
+        existing = {r["target"] for r in list_targets("http")}
+        if new in existing:                                 # already monitored: the failing entry is just a duplicate
+            remove_target("http", target)
+            event["action"] = "merge"
+        else:
+            replace_target("http", target, new, {"auto_from": target})
+    else:
+        return None
+    _record_event(**event)
+    return event
+
+
+def auto_fix_async(target):
+    """Run auto_fix in the background right after a site is added."""
+    if not auto_enabled():
+        return
+
+    def run():
+        try:
+            _auto_last[target] = time.time()
+            auto_fix(target)
+        except Exception:        # background helper: a failure must never break adding a site
+            pass
+        finally:
+            _auto_busy.discard(target)
+
+    if target not in _auto_busy:
+        _auto_busy.add(target)
+        threading.Thread(target=run, daemon=True).start()
+
+
+def auto_scan():
+    """Called periodically: fix websites that have failed for the last five minutes."""
+    if not auto_enabled():
+        return
+    import monitor
+    down = {m.get("instance", "") for m, _ in monitor.vector('min_over_time(probe_success{job="blackbox-http"}[5m]) == 0')}
+    managed = {r["target"] for r in list_targets("http")}
+    for target in sorted(down & managed):
+        if time.time() - _auto_last.get(target, 0) >= AUTO_COOLDOWN and target not in _auto_busy:
+            _auto_last[target] = time.time()
+            try:
+                auto_fix(target)
+            except Exception:
+                pass
+
+
+def auto_loop():
+    time.sleep(90)
+    while True:
+        try:
+            auto_scan()
+        except Exception:
+            pass
+        time.sleep(300)
 
 
 def _legacy_items(text):

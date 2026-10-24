@@ -86,7 +86,7 @@ def api_containers(_q):
 
 
 def api_checks(_q):
-    return {k: store.list_targets(k) for k in store.KINDS}
+    return {**{k: store.list_targets(k) for k in store.KINDS}, "auto": {"enabled": store.auto_enabled(), "events": store.auto_events()}}
 
 
 def api_rules(_q):
@@ -94,7 +94,7 @@ def api_rules(_q):
 
 
 def api_settings(_q):
-    return {"user": auth.user, "version": VERSION,
+    return {"user": auth.user, "version": VERSION, "auto_fix": store.auto_enabled(),
             "docker": {"enabled": dockerapi.ENABLED, "available": dockerapi.available()},
             "telegram": store.telegram_status()}
 
@@ -130,6 +130,18 @@ def post_checks_mode(b, _h):
 
 def post_checks_replace(b, _h):
     store.replace_target(b.get("kind"), b.get("target"), b.get("new_target"))
+    return {"ok": True}
+
+
+def post_checks_autofix(b, _h):
+    target = str(b.get("target", "")).strip()
+    if not any(r["target"] == target for r in store.list_targets("http")):
+        raise store.ConfigError("Only monitored addresses can be fixed")
+    return {"ok": True, "event": store.auto_fix(target)}
+
+
+def post_auto_setting(b, _h):
+    store.set_auto_enabled(b.get("enabled", True))
     return {"ok": True}
 
 
@@ -182,7 +194,7 @@ def post_password(b, h):
 
 
 POST_API = {
-    "/api/checks/add": post_checks_add, "/api/checks/remove": post_checks_remove, "/api/checks/probe": post_checks_probe, "/api/checks/mode": post_checks_mode, "/api/checks/replace": post_checks_replace,
+    "/api/checks/add": post_checks_add, "/api/checks/remove": post_checks_remove, "/api/checks/probe": post_checks_probe, "/api/checks/mode": post_checks_mode, "/api/checks/replace": post_checks_replace, "/api/checks/autofix": post_checks_autofix, "/api/settings/auto": post_auto_setting,
     "/api/telegram/save": post_telegram_save, "/api/telegram/test": post_telegram_test,
     "/api/telegram/chats": post_telegram_chats, "/api/telegram/remove": post_telegram_remove,
     "/api/alerts/test": post_alert_test, "/api/rules/set": post_rules_set, "/api/rules/reset": post_rules_reset,
@@ -324,6 +336,7 @@ def main():
         store.bootstrap()
     except OSError as e:
         print(f"WARNING: cannot prepare configuration files ({e}). {WRITE_HINT}", flush=True)
+    threading.Thread(target=store.auto_loop, daemon=True).start()
     print(f"panel {VERSION} listening on :{PORT}, prometheus at {monitor.PROM}, docker control "
           f"{'on' if dockerapi.ENABLED else 'off'}", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

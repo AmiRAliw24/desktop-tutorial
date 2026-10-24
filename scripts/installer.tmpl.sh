@@ -12,7 +12,7 @@
 #   bash install.sh --uninstall     # stop and remove containers (keeps data volumes)
 #   bash install.sh --purge         # also delete data volumes and the install dir
 #
-# Optional env vars: INSTALL_DIR, GRAFANA_ADMIN_USER, GRAFANA_ADMIN_PASSWORD, GRAFANA_BIND, PANEL_PORT,
+# Optional env vars: INSTALL_DIR, GRAFANA_ADMIN_USER, GRAFANA_ADMIN_PASSWORD, GRAFANA_BIND, PANEL_PORT, GRAFANA_PORT,
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SITES (comma-separated URLs), PROMETHEUS_RETENTION
 set -euo pipefail
 
@@ -97,17 +97,31 @@ port_in_use() {
     awk -v h=":$hex" '$4 == "0A" && substr($2, length($2) - 4) == h { found = 1 } END { exit !found }'
 }
 
-# If the panel port is taken by another program, move the panel to the next free port (saved in .env).
-choose_panel_port() {
+RESERVED=" "
+# choose_port VAR service container_port default
+# Picks a free host port for a service and saves it in .env. A port held by this stack's own
+# running container is fine (compose keeps it); a port held by anything else is skipped.
+choose_port() {
+  local var=$1 svc=$2 cport=$3 want p cur=""
   set -a; . "$INSTALL_DIR/.env"; set +a
-  local want=${PANEL_PORT:-8080} p
-  if command -v docker >/dev/null 2>&1 && [ -n "$(compose ps -q --status running panel 2>/dev/null)" ]; then return 0; fi  # ours, already running
+  want=${!var:-$4}
+  if command -v docker >/dev/null 2>&1; then
+    cur=$(compose port "$svc" "$cport" 2>/dev/null | head -1 | sed 's/.*://' || true)
+  fi
   p=$want
-  while port_in_use "$p"; do p=$((p + 1)); done
-  [ "$p" = "$want" ] && return 0
-  warn "Port $want is already in use by another program - using $p for the panel instead."
-  if grep -q '^PANEL_PORT=' "$INSTALL_DIR/.env"; then sed -i "s/^PANEL_PORT=.*/PANEL_PORT='$p'/" "$INSTALL_DIR/.env"
-  else echo "PANEL_PORT='$p'" >> "$INSTALL_DIR/.env"; fi
+  if [ "$cur" != "$want" ]; then
+    while port_in_use "$p" || [[ $RESERVED == *" $p "* ]]; do p=$((p + 1)); done
+  fi
+  RESERVED+="$p "
+  if [ "$p" != "$want" ]; then warn "Port $want is already in use by another program - using $p for $svc instead."; fi
+  if grep -q "^$var=" "$INSTALL_DIR/.env"; then sed -i "s/^$var=.*/$var='$p'/" "$INSTALL_DIR/.env"
+  else echo "$var='$p'" >> "$INSTALL_DIR/.env"; fi
+}
+
+# Older installs used 8080 for the panel and 3000 for Grafana; the panel now owns 3000.
+migrate_ports() {
+  grep -q '^GRAFANA_PORT=' "$INSTALL_DIR/.env" && return 0
+  if grep -q "^PANEL_PORT='8080'" "$INSTALL_DIR/.env"; then sed -i "s/^PANEL_PORT=.*/PANEL_PORT='3000'/" "$INSTALL_DIR/.env"; fi
 }
 
 # ---------------------------------------------------------------- main
@@ -136,17 +150,18 @@ extract_files
 if [ "$FRESH" = 1 ]; then
   # Values are single-quoted: .env is read by both bash and Docker Compose, and single quotes
   # keep characters like $ and spaces literal in both.
-  for v in GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD GRAFANA_BIND PANEL_PORT TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID SITES; do
+  for v in GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD GRAFANA_BIND PANEL_PORT GRAFANA_PORT TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID SITES; do
     case "${!v:-}" in *\'*|*$'\n'*) die "$v must not contain single quotes or newlines." ;; esac
   done
-  [[ ${PANEL_PORT:-8080} =~ ^[0-9]{2,5}$ ]] || die "PANEL_PORT must be a number."
+  [[ ${PANEL_PORT:-3000} =~ ^[0-9]{2,5}$ && ${GRAFANA_PORT:-3001} =~ ^[0-9]{2,5}$ ]] || die "PANEL_PORT and GRAFANA_PORT must be numbers."
   umask 077
   cat > "$INSTALL_DIR/.env" <<ENV
 GRAFANA_ADMIN_USER='$GRAFANA_ADMIN_USER'
 GRAFANA_ADMIN_PASSWORD='$GRAFANA_ADMIN_PASSWORD'
 GRAFANA_BIND='$GRAFANA_BIND'
 PANEL_BIND='$GRAFANA_BIND'
-PANEL_PORT='${PANEL_PORT:-8080}'
+PANEL_PORT='${PANEL_PORT:-3000}'
+GRAFANA_PORT='${GRAFANA_PORT:-3001}'
 PROMETHEUS_RETENTION='${PROMETHEUS_RETENTION:-30d}'
 TELEGRAM_BOT_TOKEN='${TELEGRAM_BOT_TOKEN:-}'
 TELEGRAM_CHAT_ID='${TELEGRAM_CHAT_ID:-}'
@@ -165,9 +180,11 @@ ENV
 fi
 
 "$INSTALL_DIR/scripts/render-config.sh"
-choose_panel_port
+migrate_ports
 
 if [ "$NO_START" = 1 ]; then
+  choose_port GRAFANA_PORT grafana 3000 3001
+  choose_port PANEL_PORT panel 8080 3000
   log "Files written to $INSTALL_DIR (--no-start given, containers not started)."
   exit 0
 fi
@@ -175,12 +192,17 @@ fi
 ensure_docker
 log "Pulling images and starting the stack"
 compose pull --quiet < /dev/null
+# Start Grafana first so that, on upgrades, it releases port 3000 before the panel claims it.
+choose_port GRAFANA_PORT grafana 3000 3001
+compose up -d --no-deps grafana < /dev/null
+choose_port PANEL_PORT panel 8080 3000
 compose up -d --remove-orphans < /dev/null
 
+set -a; . "$INSTALL_DIR/.env"; set +a
 log "Waiting for Grafana to become healthy"
 healthy=0
 for _ in $(seq 1 60); do
-  if curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1; then healthy=1; break; fi
+  if curl -fsS "http://127.0.0.1:${GRAFANA_PORT:-3001}/api/health" >/dev/null 2>&1; then healthy=1; break; fi
   sleep 2
 done
 [ "$healthy" = 1 ] || warn "Grafana did not respond in 2 minutes. Check: docker compose --project-directory $INSTALL_DIR logs grafana"
@@ -189,15 +211,15 @@ set -a; . "$INSTALL_DIR/.env"; set +a
 ip=$(hostname -I 2>/dev/null | awk '{print $1}'); ip=${ip:-<server-ip>}
 echo
 log "Done."
-PANEL_PORT=${PANEL_PORT:-8080}
+PANEL_PORT=${PANEL_PORT:-3000}; GRAFANA_PORT=${GRAFANA_PORT:-3001}
 if [ "$GRAFANA_BIND" = 127.0.0.1 ]; then
   echo "  Services are local-only. From your computer run:"
-  echo "    ssh -L $PANEL_PORT:127.0.0.1:$PANEL_PORT -L 3000:127.0.0.1:3000 root@$ip"
-  echo "  then open http://localhost:$PANEL_PORT (panel) and http://localhost:3000 (Grafana)"
+  echo "    ssh -L $PANEL_PORT:127.0.0.1:$PANEL_PORT -L $GRAFANA_PORT:127.0.0.1:$GRAFANA_PORT root@$ip"
+  echo "  then open http://localhost:$PANEL_PORT (panel) and http://localhost:$GRAFANA_PORT (Grafana)"
 else
   echo "  Panel:    http://$ip:$PANEL_PORT"
-  echo "  Grafana:  http://$ip:3000"
-  echo "  (open TCP ports $PANEL_PORT and 3000 in your firewall; put HTTPS in front for production)"
+  echo "  Grafana:  http://$ip:$GRAFANA_PORT"
+  echo "  (open TCP ports $PANEL_PORT and $GRAFANA_PORT in your firewall; put HTTPS in front for production)"
 fi
 echo "  Login:    $GRAFANA_ADMIN_USER / ${GENERATED_PW:+$GRAFANA_ADMIN_PASSWORD}${GENERATED_PW:-(the password you chose)}   (same for panel and Grafana)"
 [ -n "${GENERATED_PW:-}" ] && echo "  (saved in $INSTALL_DIR/.env)"

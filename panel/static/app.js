@@ -72,6 +72,7 @@
     instances: [],
     view: "overview",
     overview: null,
+    grafanaPort: 3001,
     renderId: 0,
   };
   const t = (k) => T[state.lang][k] ?? k;
@@ -167,7 +168,7 @@
     $("lang").innerHTML = `${icon("globe")}<span class="txt">${esc(t("lang_switch"))}</span>`;
     $("refresh").innerHTML = `${icon("refresh")}<span class="txt">${esc(t("refresh"))}</span>`;
     $("grafana").innerHTML = `${icon("chart")}<span class="txt">${esc(t("grafana"))}</span>`;
-    $("grafana").href = `${location.protocol}//${location.hostname}:3000/d/server-overview`;
+    $("grafana").href = `${location.protocol}//${location.hostname}:${state.grafanaPort}/d/server-overview`;
     $("logout").innerHTML = `${icon("logout")}<span class="txt">${esc(t("logout"))}</span>`;
     renderNav();
   }
@@ -470,6 +471,7 @@
   window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.view === "overview") renderView(false); }, 300); });
 
   applyLocale();
+  api("/api/config").then((c) => { state.grafanaPort = c.grafana_port; applyLocale(); }).catch(() => { /* keep default */ });
   state.view = VIEWS.some((v) => v.id === location.hash.slice(1)) ? location.hash.slice(1) : "overview";
   renderNav();
   tick(true);

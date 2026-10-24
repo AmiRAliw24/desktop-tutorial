@@ -77,10 +77,11 @@ services:
       PANEL_USER: ${GRAFANA_ADMIN_USER:-admin}
       PANEL_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
       PANEL_LISTEN_PORT: "8080"
+      GRAFANA_PORT: ${GRAFANA_PORT:-3001}
     volumes:
       - ./panel:/app:ro
     ports:
-      - "${PANEL_BIND:-0.0.0.0}:${PANEL_PORT:-8080}:8080"
+      - "${PANEL_BIND:-0.0.0.0}:${PANEL_PORT:-3000}:8080"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
       interval: 30s
@@ -101,7 +102,7 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     ports:
-      - "${GRAFANA_BIND:-0.0.0.0}:3000:3000"
+      - "${GRAFANA_BIND:-0.0.0.0}:${GRAFANA_PORT:-3001}:3000"
     depends_on: [prometheus]
     networks: [monitoring]
 

@@ -22,6 +22,7 @@ PROM = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090").rstrip("/")
 USER = os.environ.get("PANEL_USER", "admin")
 PASSWORD = os.environ.get("PANEL_PASSWORD", "")
 PORT = int(os.environ.get("PANEL_LISTEN_PORT", "8080"))
+GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3001"))
 STATIC = Path(__file__).parent / "static"
 SESSION_TTL = 7 * 24 * 3600
 COOKIE = "panel_session"
@@ -118,6 +119,10 @@ def node_selector(instance):
     return f'job="node",instance="{instance}"' if instance else 'job="node"'
 
 # ------------------------------------------------------------------ api handlers
+
+def api_config(_q):
+    return {"grafana_port": GRAFANA_PORT}
+
 
 def api_instances(_q):
     return {"instances": node_instances()}
@@ -267,7 +272,7 @@ def api_history(q):
     return {"series": series}
 
 
-API = {"/api/instances": api_instances, "/api/overview": api_overview, "/api/disks": api_disks,
+API = {"/api/config": api_config, "/api/instances": api_instances, "/api/overview": api_overview, "/api/disks": api_disks,
        "/api/network": api_network, "/api/containers": api_containers, "/api/websites": api_websites,
        "/api/targets": api_targets, "/api/alerts": api_alerts, "/api/history": api_history}
 

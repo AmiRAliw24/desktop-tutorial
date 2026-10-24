@@ -174,6 +174,60 @@ def api_network(q):
     return out
 
 
+_traffic_cache = {}
+
+
+def _instant(expr, at=None):
+    params = {"query": expr}
+    if at is not None:
+        params["time"] = at
+    rows = prom_get("/api/v1/query", params)["result"]
+    return num(rows[0]["value"][1]) if rows else None
+
+
+def api_traffic(q):
+    """Upload / download totals: calendar days in the browser's time zone, rolling 7/30 days, since boot."""
+    instance = q.get("instance") or ""
+    try:
+        tz = max(-840, min(840, int(q.get("tz", "0"))))   # minutes, as Date.getTimezoneOffset() reports them
+    except ValueError:
+        tz = 0
+    key = (instance, tz)
+    hit = _traffic_cache.get(key)
+    now = int(time.time())
+    if hit and now - hit[0] < 60:
+        return hit[1]
+    n = node_selector(instance, net=True)
+    rxm = f"node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}"
+    txm = f"node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}"
+
+    def total(rng, at=None):
+        return {"rx": _instant(f"sum(increase({rxm}[{rng}s]))", at), "tx": _instant(f"sum(increase({txm}[{rng}s]))", at)}
+
+    local_midnight = (now - tz * 60) // 86400 * 86400 + tz * 60
+    days = []
+    for k in range(7):
+        start = local_midnight - k * 86400
+        end = now if k == 0 else start + 86400
+        span = max(60, end - start)
+        d = total(span, end)
+        days.append({"start": start, "end": end, **d})
+    out = {
+        "days": days,
+        "week": total(7 * 86400),
+        "month": total(30 * 86400),
+        "boot": {"rx": _instant(f"sum({rxm})"), "tx": _instant(f"sum({txm})")},
+        "peak": {"rx": _instant(f"max_over_time(sum(rate({rxm}[2m]))[24h:1m])"),
+                 "tx": _instant(f"max_over_time(sum(rate({txm}[2m]))[24h:1m])")},
+        # how much history exists, so the UI can say "based on 3 days of data" for the longer periods
+        "history": _instant(f"time() - min(min_over_time(timestamp({rxm})[30d:1m]))"),
+    }
+    _traffic_cache[key] = (now, out)
+    if len(_traffic_cache) > 50:
+        _traffic_cache.clear()
+    return out
+
+
 # cAdvisor's `name` label is missing on many Docker setups (containerd image store, cgroup v2), but the
 # `id` label always carries the 64-hex container id inside the cgroup path, so containers are matched by id.
 CG_DOCKER = r'id=~".*docker[-/][a-f0-9]{64}(\\.scope)?"'
@@ -259,5 +313,5 @@ def api_history(q):
 
 
 READ_API = {"/api/instances": api_instances, "/api/overview": api_overview, "/api/disks": api_disks,
-            "/api/network": api_network, "/api/websites": api_websites,
+            "/api/network": api_network, "/api/traffic": api_traffic, "/api/websites": api_websites,
             "/api/targets": api_targets, "/api/alerts": api_alerts, "/api/history": api_history}

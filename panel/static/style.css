@@ -555,8 +555,8 @@ dialog.sheet::backdrop { background: rgba(3, 7, 12, .6); backdrop-filter: blur(4
   td .chips { justify-content: flex-end; }
   td .mini-bar { min-width: 0; width: 100%; max-width: 190px; }
   td[data-label=""]::before, td:not([data-label])::before { display: none; }
-  td:last-child:not(:first-child) { justify-content: flex-end; padding-top: 10px; margin-top: 4px; border-top: 1px solid var(--line); }
-  td:last-child:not(:first-child)::before { display: none; }
+  td.act { justify-content: flex-end; padding-top: 10px; margin-top: 4px; border-top: 1px solid var(--line); }
+  td.act::before { display: none; }
   .row-actions { gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
   .row-actions .btn.small.icon { width: 42px; height: 42px; }
   .btn.small { height: 40px; }
@@ -602,3 +602,43 @@ button.chip { font: inherit; cursor: pointer; color: var(--muted); text-align: s
 button.chip:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
 button.chip:disabled { cursor: default; opacity: .6; }
 .chip .ipl { font-size: 10.5px; letter-spacing: .08em; color: var(--accent); background: var(--accent-soft); padding: 0 6px; border-radius: 6px; line-height: 1.7; }
+
+/* ================================================================== network page: traffic usage */
+.sec { display: grid; gap: 14px; }
+.sec + .sec { margin-top: 26px; }
+.sec-head { display: flex; align-items: baseline; gap: 6px 14px; flex-wrap: wrap; }
+.sec-head h3 { margin: 0; display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 800; }
+.sec-head h3 .ico { color: var(--accent); width: 18px; height: 18px; }
+.sec-head p { margin: 0; font-size: 12.5px; }
+
+.usage-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+.usage { border: 1px solid var(--line); border-radius: 16px; background: var(--surface-2); padding: 16px 18px 14px; min-width: 0; display: grid; gap: 10px; align-content: start; }
+.u-label { color: var(--muted); font-size: 12.5px; font-weight: 700; letter-spacing: .03em; }
+.u-total { font-size: 28px; font-weight: 800; letter-spacing: -.015em; line-height: 1.1; }
+.u-split { display: flex; gap: 2px; height: 8px; border-radius: 6px; overflow: hidden; background: var(--surface-3); direction: ltr; }
+.u-split i { display: block; height: 100%; min-width: 0; transition: width .5s; }
+.u-split i.rx { background: var(--c1); border-radius: 6px 2px 2px 6px; }
+.u-split i.tx { background: var(--c2); border-radius: 2px 6px 6px 2px; }
+.u-rows { display: grid; gap: 6px; }
+.u-rows > div { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.u-rows .ico { width: 15px; height: 15px; color: var(--faint); }
+.u-rows span:not(.k) { flex: 1; min-width: 0; }
+.u-rows b { color: var(--ink); font-weight: 750; font-variant-numeric: tabular-nums; }
+.u-rows .k { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.u-rows .k.rx { background: var(--c1); }
+.u-rows .k.tx { background: var(--c2); }
+.u-note { font-size: 11.5px; color: var(--faint); line-height: 1.4; }
+
+.tr-chart .legend { align-items: center; }
+.tr-chart .legend .chip { padding: 3px 10px; font-size: 12px; margin-inline-start: auto; }
+.tr-chart .legend .chip + .chip { margin-inline-start: 0; }
+.plot .hl { fill: var(--line); }
+.tip .r i:empty { background: none; }
+
+@media (max-width: 699px) {
+  .usage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .usage { padding: 14px; }
+  .u-total { font-size: 22px; }
+  .tr-chart .legend .chip { margin-inline-start: 0; }
+}
+@media (max-width: 380px) { .usage-grid { grid-template-columns: minmax(0, 1fr); } }

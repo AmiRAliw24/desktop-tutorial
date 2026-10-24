@@ -38,6 +38,9 @@
       h_ok: "Everything is healthy", h_ok_sub: "The server and all of your checks are working normally.", h_warn: "Needs your attention", h_bad: "Problems detected",
       i_alerts: "{n} active alert(s)", i_sites: "{n} website/port check(s) failing", i_targets: "{n} monitoring target(s) not responding",
       i_res: "{what} is high ({v}%)", i_pending: "{n} alert(s) about to fire", i_ssl: "an SSL certificate expires in {n} day(s)",
+            net_ifaces: "Network interfaces", tr_title: "Traffic usage", tr_sub: "Everything this server has downloaded and uploaded through its real network cards.",
+      tr_day: "Day", tr_today: "Today", tr_yesterday: "Yesterday", tr_7d: "Last 7 days", tr_30d: "Last 30 days", tr_boot: "Since boot", tr_total: "Total", tr_down: "Download", tr_up: "Upload",
+      tr_daily: "Daily traffic", tr_peak_in: "Peak download (24h)", tr_peak_out: "Peak upload (24h)", tr_partial: "Only {d} of data collected so far",
       lv_ok: "Normal", lv_warn: "High", lv_bad: "Critical", address: "Address", more: "More", tbl_view: "Table view", time: "Time",
       err_api: "Cannot load data", last_update: "Last update", auto: "auto-refresh every 10s", ago: "ago",
       t_dark: "Switch to light theme", t_light: "Switch to dark theme",
@@ -164,6 +167,9 @@
       h_ok: "همه چیز سالم است", h_ok_sub: "سرور و تمام بررسی‌های شما عادی کار می‌کنند.", h_warn: "نیاز به توجه دارد", h_bad: "مشکل شناسایی شد",
       i_alerts: "{n} هشدار فعال", i_sites: "{n} بررسی سایت/پورت ناموفق است", i_targets: "{n} هدف مانیتورینگ پاسخ نمی‌دهد",
       i_res: "{what} بالا است ({v}٪)", i_pending: "{n} هشدار در آستانه‌ی فعال شدن", i_ssl: "گواهی SSL تا {n} روز دیگر منقضی می‌شود",
+            net_ifaces: "کارت‌های شبکه", tr_title: "مصرف ترافیک", tr_sub: "کل چیزی که این سرور از طریق کارت‌های شبکه‌ی واقعی‌اش دانلود و آپلود کرده است.",
+      tr_day: "روز", tr_today: "امروز", tr_yesterday: "دیروز", tr_7d: "۷ روز اخیر", tr_30d: "۳۰ روز اخیر", tr_boot: "از زمان بوت", tr_total: "مجموع", tr_down: "دانلود", tr_up: "آپلود",
+      tr_daily: "ترافیک روزانه", tr_peak_in: "اوج دانلود (۲۴ ساعت)", tr_peak_out: "اوج آپلود (۲۴ ساعت)", tr_partial: "فقط {d} داده جمع‌آوری شده است",
       lv_ok: "عادی", lv_warn: "بالا", lv_bad: "بحرانی", address: "آدرس", more: "بیشتر", tbl_view: "نمایش جدول", time: "زمان",
       err_api: "داده‌ها بارگذاری نشد", last_update: "آخرین بروزرسانی", auto: "بروزرسانی خودکار هر ۱۰ ثانیه", ago: "پیش",
       t_dark: "تم روشن", t_light: "تم تیره",
@@ -614,7 +620,7 @@
   function table(cols, rows, rowAttrs) {
     if (!rows.length) return `<div class="table-wrap"><div class="empty">${esc(t("empty"))}</div></div>`;
     const head = cols.map((c) => `<th>${c.raw ? c.h : esc(t(c.h))}</th>`).join("");
-    const body = rows.map((r) => `<tr${rowAttrs ? " " + rowAttrs(r) : ""}>${cols.map((c) => `<td class="${c.cls || ""}" data-label="${c.raw ? "" : esc(t(c.h))}">${c.cell(r)}</td>`).join("")}</tr>`).join("");
+    const body = rows.map((r) => `<tr${rowAttrs ? " " + rowAttrs(r) : ""}>${cols.map((c) => `<td class="${c.cls || ""}${c.h === "actions" || c.raw ? " act" : ""}" data-label="${c.raw ? "" : esc(t(c.h))}">${c.cell(r)}</td>`).join("")}</tr>`).join("");
     return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
   }
   const pill = (kind, text, dot = true) => `<span class="pill ${kind}${dot ? " dot" : ""}">${esc(text)}</span>`;
@@ -725,7 +731,8 @@
           const detail = exporter && exporter.error ? ` <code>${esc(exporter.error)}</code>` : "";
           return `<div class="notice bad">${icon("bell")}<span>${esc(t(why))}${detail}</span></div>` + table([], []);
         }
-        return table([
+        try { state.traffic = await api("/api/traffic", withInstance({ tz: new Date().getTimezoneOffset() })); } catch (e) { state.traffic = null; }   // the totals are optional
+        const ifaces = table([
           { h: "iface", cls: "strong", cell: (r) => num(esc(r.device)) },
           { h: "status", cell: (r) => (r.up ? pill("ok", t("s_up")) : pill("bad", t("s_down"))) },
           { h: "speed", cell: (r) => num(r.speed ? `${nf((r.speed * 8) / 1e6, 0)} Mbit/s` : "–") },
@@ -734,7 +741,9 @@
           { h: "total_in", cell: (r) => num(fmtBytes(r.rx_total)) },
           { h: "total_out", cell: (r) => num(fmtBytes(r.tx_total)) },
         ], rows);
+        return `<section class="sec"><div class="sec-head"><h3>${icon("network")}${esc(t("net_ifaces"))}</h3></div>${ifaces}</section>${state.traffic ? trafficSection(state.traffic) : ""}`;
       },
+      bind() { paintBars(); },
     },
 
     targets: {
@@ -1222,6 +1231,105 @@
     if (id === state.renderId) refreshSparks();
   }
 
+  // ---------------------------------------------------------------- traffic usage (network page)
+  state.traffic = null;
+  state.trTable = false;
+  const dayLabel = (d, k) => {
+    if (k === 0) return t("tr_today");
+    if (k === 1) return t("tr_yesterday");
+    const x = new Date(d.start * 1000);
+    return `${x.getMonth() + 1}/${x.getDate()}`;
+  };
+  function usageCard(label, d, note = "") {
+    const rx = d.rx || 0, tx = d.tx || 0, sum = rx + tx, share = sum ? (rx / sum) * 100 : 0;
+    const known = d.rx != null || d.tx != null;
+    return `<div class="usage"><div class="u-label">${esc(label)}</div>
+      <div class="u-total">${known ? num(esc(fmtBytes(sum))) : "–"}</div>
+      <div class="u-split" aria-hidden="true"><i class="rx" style="width:${share.toFixed(1)}%"></i><i class="tx" style="width:${sum ? (100 - share).toFixed(1) : 0}%"></i></div>
+      <div class="u-rows"><div><span class="k rx"></span>${icon("down")}<span>${esc(t("tr_down"))}</span><b>${num(esc(known ? fmtBytes(rx) : "–"))}</b></div>
+      <div><span class="k tx"></span>${icon("up")}<span>${esc(t("tr_up"))}</span><b>${num(esc(known ? fmtBytes(tx) : "–"))}</b></div></div>
+      ${note ? `<div class="u-note">${esc(note)}</div>` : ""}</div>`;
+  }
+  function trafficSection(tr) {
+    const hist = tr.history, partial = (secs) => (hist != null && hist < secs * 0.95 ? t("tr_partial", { d: fmtDur(hist) }) : "");
+    const cards = [
+      usageCard(t("tr_today"), tr.days[0], partial(Math.max(60, tr.days[0].end - tr.days[0].start))),
+      usageCard(t("tr_7d"), tr.week, partial(7 * 86400)),
+      usageCard(t("tr_30d"), tr.month, partial(30 * 86400)),
+      usageCard(t("tr_boot"), tr.boot),
+    ].join("");
+    const peak = (label, v) => `<span class="chip">${esc(label)} <b>${num(esc(fmtRate(v)))}</b></span>`;
+    return `<section class="sec"><div class="sec-head"><h3>${icon("activity")}${esc(t("tr_title"))}</h3><p class="muted">${esc(t("tr_sub"))}</p></div>
+      <div class="usage-grid">${cards}</div>
+      <div class="chart tr-chart"><header><h3>${esc(t("tr_daily"))}</h3><button type="button" class="btn small icon ghost view-toggle" data-trtable aria-pressed="${state.trTable}" title="${esc(t("tbl_view"))}" aria-label="${esc(t("tbl_view"))}">${icon("table")}</button></header>
+        <div class="legend"><span><i style="background:var(--c1)"></i>${esc(t("tr_down"))}</span><span><i style="background:var(--c2)"></i>${esc(t("tr_up"))}</span>
+          ${tr.peak.rx != null ? peak(t("tr_peak_in"), tr.peak.rx) : ""}${tr.peak.tx != null ? peak(t("tr_peak_out"), tr.peak.tx) : ""}</div>
+        <div class="plot" id="tr-plot"></div></div></section>`;
+  }
+
+  function barsTable(days) {
+    const rows = days.map((d, k) => `<tr><td>${esc(dayLabel(d, k))}</td><td>${num(esc(fmtBytes(d.rx)))}</td><td>${num(esc(fmtBytes(d.tx)))}</td><td>${num(esc(fmtBytes((d.rx || 0) + (d.tx || 0))))}</td></tr>`).join("");
+    return `<div class="chart-table table-wrap"><table><thead><tr><th>${esc(t("tr_day"))}</th><th>${esc(t("tr_down"))}</th><th>${esc(t("tr_up"))}</th><th>${esc(t("tr_total"))}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+
+  function paintBars() {
+    const box = $("tr-plot"), tr = state.traffic;
+    if (!box || !tr) return;
+    if (state.trTable) { box.innerHTML = barsTable(tr.days); return; }
+    const days = tr.days.map((d, k) => ({ ...d, label: dayLabel(d, k) })).reverse();   // oldest first
+    const vals = days.flatMap((d) => [d.rx || 0, d.tx || 0]);
+    if (!Math.max(...vals)) { box.innerHTML = `<div class="empty">${esc(t("no_data"))}</div>`; return; }
+    const bw = Math.round(box.clientWidth) || 600, compact = bw < 420;
+    const W = Math.max(260, bw), H = compact ? 190 : 220, L = compact ? 52 : 62, R = 8, TOP = 12, B = 26;
+    const unit = 1024 ** Math.max(0, Math.floor(Math.log(Math.max(...vals)) / Math.log(1024))), ymax = niceMax((Math.max(...vals) * 1.08) / unit) * unit, plotW = W - L - R, gw = plotW / days.length;
+    const Y = (v) => TOP + (1 - v / ymax) * (H - TOP - B);
+    const barW = Math.max(6, Math.min(30, gw * 0.3));
+    let grid = "", bars = "", hits = "";
+    for (let i = 0; i <= 4; i++) {
+      const v = (ymax * i) / 4, y = Y(v);
+      grid += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}"/><text x="${L - 8}" y="${y + 4}" text-anchor="end">${esc(fmtBytes(v))}</text>`;
+    }
+    const topRound = (x, y, w, h, r) => {   // rounded data end, flat on the baseline
+      r = Math.min(r, w / 2, h);
+      return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+    };
+    days.forEach((d, i) => {
+      const cx = L + gw * i + gw / 2;
+      grid += `<text x="${cx}" y="${H - 7}" text-anchor="middle">${esc(d.label)}</text>`;
+      [["rx", "--c1", -1], ["tx", "--c2", 1]].forEach(([k, col, side]) => {
+        const v = d[k] || 0;
+        if (v <= 0) return;
+        const h = Math.max(2, (H - TOP - B) * (v / ymax)), x = side < 0 ? cx - barW - 1 : cx + 1;
+        bars += `<path d="${topRound(x, Y(0) - h, barW, h, 4)}" fill="var(${col})"/>`;
+      });
+      hits += `<rect class="hit" data-i="${i}" x="${L + gw * i}" y="0" width="${gw}" height="${H}" fill="transparent"/>`;
+    });
+    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(t("tr_daily"))}"><g class="grid">${grid}</g><rect class="hl" y="${TOP}" height="${H - TOP - B}" width="${gw}" opacity="0"/>${bars}${hits}</svg><div class="tip" hidden></div>`;
+    const svg = box.querySelector("svg"), tip = box.querySelector(".tip"), hl = box.querySelector(".hl");
+    const show = (e) => {
+      const rect = svg.getBoundingClientRect();
+      const px = ((e.clientX - rect.left) / rect.width) * W;
+      const i = Math.max(0, Math.min(days.length - 1, Math.floor((px - L) / gw)));
+      if (px < L) return;
+      const d = days[i], cx = L + gw * i;
+      hl.setAttribute("x", cx); hl.setAttribute("opacity", "1");
+      const when = new Date(d.start * 1000);
+      tip.innerHTML = `<div class="t">${esc(`${d.label} · ${when.getMonth() + 1}/${when.getDate()}`)}</div>
+        <div class="r"><i style="background:var(--c1)"></i><b>${num(esc(fmtBytes(d.rx)))}</b><span>${esc(t("tr_down"))}</span></div>
+        <div class="r"><i style="background:var(--c2)"></i><b>${num(esc(fmtBytes(d.tx)))}</b><span>${esc(t("tr_up"))}</span></div>
+        <div class="r"><i></i><b>${num(esc(fmtBytes((d.rx || 0) + (d.tx || 0))))}</b><span>${esc(t("tr_total"))}</span></div>`;
+      tip.hidden = false;
+      const mid = ((cx + gw / 2) / W) * rect.width, w = tip.offsetWidth;
+      tip.style.left = `${Math.max(0, Math.min(rect.width - w, mid > rect.width / 2 ? mid - w - gw * 0.35 : mid + gw * 0.35))}px`;
+      tip.style.top = "4px";
+    };
+    const rest = () => { tip.hidden = true; hl.setAttribute("opacity", "0"); };
+    svg.addEventListener("pointermove", show);
+    svg.addEventListener("pointerdown", show);
+    svg.addEventListener("pointerleave", rest);
+    svg.addEventListener("pointercancel", rest);
+  }
+
   // ---------------------------------------------------------------- view rendering
   function overviewTools() {
     const label = (i) => (state.names[i] ? `${state.names[i]} (${i})` : i);
@@ -1308,6 +1416,12 @@
     const go = e.target.closest("[data-go]");
     if (go) { location.hash = go.dataset.go; return; }
     if (e.target.closest("[data-more]")) { moreSheet(); return; }
+    if (e.target.closest("[data-trtable]")) {
+      state.trTable = !state.trTable;
+      e.target.closest("[data-trtable]").setAttribute("aria-pressed", String(state.trTable));
+      paintBars();
+      return;
+    }
     const cp = e.target.closest("[data-copy]");
     if (cp) { copyText(cp.dataset.copy); return; }
     const tv = e.target.closest("[data-tv]");
@@ -1322,7 +1436,7 @@
     if ((e.key === "Enter" || e.key === " ") && e.target.matches && e.target.matches('[data-go][role="link"]')) { e.preventDefault(); location.hash = e.target.dataset.go; }
   });
   let resizeTimer;
-  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.view === "overview") renderView(false); }, 300); });
+  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.view === "overview" || state.view === "network") renderView(false); }, 300); });
 
   applyLocale();
   state.view = VIEWS.some((v) => v.id === location.hash.slice(1)) ? location.hash.slice(1) : "overview";

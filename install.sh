@@ -1507,17 +1507,31 @@ def api_disks(q):
     return {"rows": disk_rows(node_selector(q.get("instance")))}
 
 
+def net_exporter_status():
+    """State of the node-net scrape target, so the UI can explain an empty network table."""
+    for t in prom_get("/api/v1/targets", {"state": "active"})["activeTargets"]:
+        if t["labels"].get("job") == "node-net":
+            return {"present": True, "up": t["health"] != "down", "error": t.get("lastError", "")}
+    return {"present": False, "up": False, "error": ""}
+
+
 def api_network(q):
     n = node_selector(q.get("instance"), net=True)
-    rx = by_label(f"rate(node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}[2m])", "device")
-    tx = by_label(f"rate(node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}[2m])", "device")
+    # Rows come from the counters so cards show up immediately; rates need ~30s of samples.
     rx_total = by_label(f"node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}", "device")
     tx_total = by_label(f"node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}", "device")
     up = by_label(f"node_network_up{{{n},{VIRTUAL_NICS}}}", "device")
+    rx = by_label(f"rate(node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}[2m])", "device")
+    tx = by_label(f"rate(node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}[2m])", "device")
     speed = by_label(f"node_network_speed_bytes{{{n},{VIRTUAL_NICS}}}", "device")
-    return {"rows": [{"device": d, "up": up.get(d) == 1, "rx": rx.get(d), "tx": tx.get(d),
-                      "rx_total": rx_total.get(d), "tx_total": tx_total.get(d),
-                      "speed": speed.get(d) if (speed.get(d) or 0) > 0 else None} for d in sorted(rx)]}
+    rows = [{"device": d, "up": up.get(d) == 1 if d in up else True, "rx": rx.get(d), "tx": tx.get(d),
+             "rx_total": rx_total.get(d), "tx_total": tx_total.get(d),
+             "speed": speed.get(d) if (speed.get(d) or 0) > 0 else None}
+            for d in sorted(set(rx_total) | set(tx_total) | set(up))]
+    out = {"rows": rows}
+    if not rows:
+        out["exporter"] = net_exporter_status()
+    return out
 
 
 def api_containers(_q):
@@ -1787,6 +1801,9 @@ __MONITORING_EOF__
       d_websites: "Uptime, response time and SSL certificate checks. Edit prometheus/targets/http.yml to add sites.",
       d_disks: "Mounted filesystems and how full they are.",
       d_network: "Traffic on the physical network interfaces (virtual and Docker interfaces are hidden).",
+      nx_nodata: "No network interface data yet. Rates need about 30 seconds of samples; if this stays empty, check the Targets tab.",
+      nx_nojob: "The node-net exporter is not in Prometheus. Re-run install.sh, or run: docker compose up -d && docker compose restart panel prometheus",
+      nx_down: "The node-net exporter is down, so network cards cannot be read. Error:",
       d_targets: "Everything Prometheus scrapes. A target that is down means its metrics are missing.",
       d_alerts: "Alerts that are firing or about to fire. Rules live in prometheus/rules/alerts.yml.",
       server: "Server", range: "Range", r1h: "Last hour", r6h: "Last 6 hours", r24h: "Last 24 hours", r7d: "Last 7 days",
@@ -1814,6 +1831,9 @@ __MONITORING_EOF__
       d_websites: "چک آپتایم، زمان پاسخ و گواهی SSL. برای افزودن سایت، فایل prometheus/targets/http.yml را ویرایش کنید.",
       d_disks: "فایل‌سیستم‌های مونت‌شده و میزان پر بودن هرکدام.",
       d_network: "ترافیک کارت‌شبکه‌های واقعی (کارت‌های مجازی و داکر پنهان هستند).",
+      nx_nodata: "هنوز داده‌ی کارت شبکه نرسیده. نرخ‌ها حدود ۳۰ ثانیه داده می‌خواهند؛ اگر خالی ماند تب تارگت‌ها را ببینید.",
+      nx_nojob: "اکسپورتر node-net در Prometheus نیست. install.sh را دوباره اجرا کنید یا بزنید: docker compose up -d && docker compose restart panel prometheus",
+      nx_down: "اکسپورتر node-net قطع است و کارت‌های شبکه خوانده نمی‌شوند. خطا:",
       d_targets: "همه‌ی چیزهایی که Prometheus از آن‌ها متریک می‌گیرد. تارگت قطع یعنی متریکش را نداریم.",
       d_alerts: "هشدارهایی که فعال هستند یا در شرف فعال شدن‌اند. قوانین در prometheus/rules/alerts.yml هستند.",
       server: "سرور", range: "بازه", r1h: "یک ساعت اخیر", r6h: "۶ ساعت اخیر", r24h: "۲۴ ساعت اخیر", r7d: "۷ روز اخیر",
@@ -2033,7 +2053,12 @@ __MONITORING_EOF__
       ], rows);
     },
     async network() {
-      const { rows } = await api("/api/network", withInstance());
+      const { rows, exporter } = await api("/api/network", withInstance());
+      if (!rows.length) {
+        const why = !exporter ? "nx_nodata" : !exporter.present ? "nx_nojob" : !exporter.up ? "nx_down" : "nx_nodata";
+        const detail = exporter && exporter.error ? ` <code>${esc(exporter.error)}</code>` : "";
+        return `<div class="notice bad">${icon("bell")}<span>${esc(t(why))}${detail}</span></div>` + table([], []);
+      }
       return table([
         { h: "iface", cls: "strong", cell: (r) => num(esc(r.device)) },
         { h: "status", cell: (r) => (r.up ? pill("ok", t("s_up")) : pill("bad", t("s_down"))) },
@@ -2499,6 +2524,8 @@ td.muted, .muted { color: var(--muted); }
   .btn { padding: 0 11px; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; direction: ltr; unicode-bidi: isolate; word-break: break-all; }
 __MONITORING_EOF__
   write_file panel/static/favicon.svg 644 <<'__MONITORING_EOF__'
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#0e1520"/><path d="M16 5l9 3.5v7c0 5.4-3.7 9.2-9 11.5-5.3-2.3-9-6.1-9-11.5v-7L16 5z" fill="none" stroke="#2ee6a6" stroke-width="2" stroke-linejoin="round"/><path d="M10.5 16h3l2-3.5 2.5 7 2-3.5h1.5" fill="none" stroke="#2ee6a6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -2654,6 +2681,8 @@ choose_port PANEL_PORT panel 8080 3000
 compose up -d --remove-orphans < /dev/null
 # Config files are bind-mounted, so running containers need a nudge to re-read them.
 compose kill -s SIGHUP prometheus alertmanager < /dev/null >/dev/null 2>&1 || true
+# The panel's Python code is loaded once at start, so an updated server.py needs a restart.
+compose restart panel < /dev/null >/dev/null 2>&1 || true
 
 set -a; . "$INSTALL_DIR/.env"; set +a
 log "Waiting for Grafana to become healthy"

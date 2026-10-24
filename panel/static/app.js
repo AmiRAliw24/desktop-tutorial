@@ -16,6 +16,9 @@
       d_websites: "Uptime, response time and SSL certificate checks. Edit prometheus/targets/http.yml to add sites.",
       d_disks: "Mounted filesystems and how full they are.",
       d_network: "Traffic on the physical network interfaces (virtual and Docker interfaces are hidden).",
+      nx_nodata: "No network interface data yet. Rates need about 30 seconds of samples; if this stays empty, check the Targets tab.",
+      nx_nojob: "The node-net exporter is not in Prometheus. Re-run install.sh, or run: docker compose up -d && docker compose restart panel prometheus",
+      nx_down: "The node-net exporter is down, so network cards cannot be read. Error:",
       d_targets: "Everything Prometheus scrapes. A target that is down means its metrics are missing.",
       d_alerts: "Alerts that are firing or about to fire. Rules live in prometheus/rules/alerts.yml.",
       server: "Server", range: "Range", r1h: "Last hour", r6h: "Last 6 hours", r24h: "Last 24 hours", r7d: "Last 7 days",
@@ -43,6 +46,9 @@
       d_websites: "چک آپتایم، زمان پاسخ و گواهی SSL. برای افزودن سایت، فایل prometheus/targets/http.yml را ویرایش کنید.",
       d_disks: "فایل‌سیستم‌های مونت‌شده و میزان پر بودن هرکدام.",
       d_network: "ترافیک کارت‌شبکه‌های واقعی (کارت‌های مجازی و داکر پنهان هستند).",
+      nx_nodata: "هنوز داده‌ی کارت شبکه نرسیده. نرخ‌ها حدود ۳۰ ثانیه داده می‌خواهند؛ اگر خالی ماند تب تارگت‌ها را ببینید.",
+      nx_nojob: "اکسپورتر node-net در Prometheus نیست. install.sh را دوباره اجرا کنید یا بزنید: docker compose up -d && docker compose restart panel prometheus",
+      nx_down: "اکسپورتر node-net قطع است و کارت‌های شبکه خوانده نمی‌شوند. خطا:",
       d_targets: "همه‌ی چیزهایی که Prometheus از آن‌ها متریک می‌گیرد. تارگت قطع یعنی متریکش را نداریم.",
       d_alerts: "هشدارهایی که فعال هستند یا در شرف فعال شدن‌اند. قوانین در prometheus/rules/alerts.yml هستند.",
       server: "سرور", range: "بازه", r1h: "یک ساعت اخیر", r6h: "۶ ساعت اخیر", r24h: "۲۴ ساعت اخیر", r7d: "۷ روز اخیر",
@@ -262,7 +268,12 @@
       ], rows);
     },
     async network() {
-      const { rows } = await api("/api/network", withInstance());
+      const { rows, exporter } = await api("/api/network", withInstance());
+      if (!rows.length) {
+        const why = !exporter ? "nx_nodata" : !exporter.present ? "nx_nojob" : !exporter.up ? "nx_down" : "nx_nodata";
+        const detail = exporter && exporter.error ? ` <code>${esc(exporter.error)}</code>` : "";
+        return `<div class="notice bad">${icon("bell")}<span>${esc(t(why))}${detail}</span></div>` + table([], []);
+      }
       return table([
         { h: "iface", cls: "strong", cell: (r) => num(esc(r.device)) },
         { h: "status", cell: (r) => (r.up ? pill("ok", t("s_up")) : pill("bad", t("s_down"))) },

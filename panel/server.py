@@ -195,17 +195,31 @@ def api_disks(q):
     return {"rows": disk_rows(node_selector(q.get("instance")))}
 
 
+def net_exporter_status():
+    """State of the node-net scrape target, so the UI can explain an empty network table."""
+    for t in prom_get("/api/v1/targets", {"state": "active"})["activeTargets"]:
+        if t["labels"].get("job") == "node-net":
+            return {"present": True, "up": t["health"] != "down", "error": t.get("lastError", "")}
+    return {"present": False, "up": False, "error": ""}
+
+
 def api_network(q):
     n = node_selector(q.get("instance"), net=True)
-    rx = by_label(f"rate(node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}[2m])", "device")
-    tx = by_label(f"rate(node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}[2m])", "device")
+    # Rows come from the counters so cards show up immediately; rates need ~30s of samples.
     rx_total = by_label(f"node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}", "device")
     tx_total = by_label(f"node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}", "device")
     up = by_label(f"node_network_up{{{n},{VIRTUAL_NICS}}}", "device")
+    rx = by_label(f"rate(node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}[2m])", "device")
+    tx = by_label(f"rate(node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}[2m])", "device")
     speed = by_label(f"node_network_speed_bytes{{{n},{VIRTUAL_NICS}}}", "device")
-    return {"rows": [{"device": d, "up": up.get(d) == 1, "rx": rx.get(d), "tx": tx.get(d),
-                      "rx_total": rx_total.get(d), "tx_total": tx_total.get(d),
-                      "speed": speed.get(d) if (speed.get(d) or 0) > 0 else None} for d in sorted(rx)]}
+    rows = [{"device": d, "up": up.get(d) == 1 if d in up else True, "rx": rx.get(d), "tx": tx.get(d),
+             "rx_total": rx_total.get(d), "tx_total": tx_total.get(d),
+             "speed": speed.get(d) if (speed.get(d) or 0) > 0 else None}
+            for d in sorted(set(rx_total) | set(tx_total) | set(up))]
+    out = {"rows": rows}
+    if not rows:
+        out["exporter"] = net_exporter_status()
+    return out
 
 
 def api_containers(_q):

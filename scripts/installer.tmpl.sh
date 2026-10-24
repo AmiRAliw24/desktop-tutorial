@@ -4,8 +4,8 @@
 # node_exporter + cAdvisor + Blackbox exporter under /opt/server-monitoring.
 #
 # Usage (as root):
-#   curl -fsSL <URL>/install.sh | sudo bash          # one-liner, interactive
-#   curl -fsSL <URL>/install.sh | sudo bash -s -- -y # one-liner, no questions (uses env vars)
+#   curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/HEAD/install.sh | sudo bash          # one-liner, interactive
+#   curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/HEAD/install.sh | sudo bash -s -- -y # one-liner, no questions (uses env vars)
 #   bash install.sh                 # interactive
 #   bash install.sh -y              # non-interactive, uses env vars / defaults
 #   bash install.sh --no-start      # write files only, don't start containers

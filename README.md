@@ -42,16 +42,16 @@
 روی سرور (به‌عنوان root یا با sudo):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/HEAD/install.sh | sudo bash
 ```
 
 بدون سؤال، با متغیرهای محیطی (به `env` دقت کنید تا متغیرها به sudo برسند):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/main/install.sh | sudo env PANEL_PASSWORD='...' SITES='https://a.com' bash -s -- -y
+curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/HEAD/install.sh | sudo env PANEL_PASSWORD='...' SITES='https://a.com' bash -s -- -y
 ```
 
-این آدرس فقط وقتی کار می‌کند که ریپو public باشد و `install.sh` روی برنچ `main` قرار گرفته باشد. اگر ریپو private است، فایل را با `scp` کپی کنید (روش بعدی).
+`HEAD` در آدرس همیشه به برنچ پیش‌فرض ریپو اشاره می‌کند، پس حتی اگر اسم برنچ عوض شود لینک کار می‌کند. ریپو باید public باشد؛ اگر private است، فایل را با `scp` کپی کنید (روش بعدی). گیت‌هاب فایل‌های raw را تا چند دقیقه کش می‌کند، پس بعد از هر آپدیت ممکن است چند دقیقه نسخه‌ی قبلی را بدهد.
 
 ## نصب روی سرور لینوکسی (تک‌فایل)
 

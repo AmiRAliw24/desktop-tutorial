@@ -90,6 +90,26 @@ ensure_docker() {
   docker info >/dev/null 2>&1 || die "Docker daemon is not running."
 }
 
+# True if something is already listening on TCP port $1 (reads /proc, so no extra tools are needed).
+port_in_use() {
+  local hex f; hex=$(printf '%04X' "$1")
+  for f in /proc/net/tcp /proc/net/tcp6; do if [ -r "$f" ]; then cat "$f"; fi; done |
+    awk -v h=":$hex" '$4 == "0A" && substr($2, length($2) - 4) == h { found = 1 } END { exit !found }'
+}
+
+# If the panel port is taken by another program, move the panel to the next free port (saved in .env).
+choose_panel_port() {
+  set -a; . "$INSTALL_DIR/.env"; set +a
+  local want=${PANEL_PORT:-8080} p
+  if command -v docker >/dev/null 2>&1 && [ -n "$(compose ps -q --status running panel 2>/dev/null)" ]; then return 0; fi  # ours, already running
+  p=$want
+  while port_in_use "$p"; do p=$((p + 1)); done
+  [ "$p" = "$want" ] && return 0
+  warn "Port $want is already in use by another program - using $p for the panel instead."
+  if grep -q '^PANEL_PORT=' "$INSTALL_DIR/.env"; then sed -i "s/^PANEL_PORT=.*/PANEL_PORT='$p'/" "$INSTALL_DIR/.env"
+  else echo "PANEL_PORT='$p'" >> "$INSTALL_DIR/.env"; fi
+}
+
 # ---------------------------------------------------------------- main
 FRESH=1; [ -f "$INSTALL_DIR/.env" ] && FRESH=0
 
@@ -145,6 +165,7 @@ ENV
 fi
 
 "$INSTALL_DIR/scripts/render-config.sh"
+choose_panel_port
 
 if [ "$NO_START" = 1 ]; then
   log "Files written to $INSTALL_DIR (--no-start given, containers not started)."

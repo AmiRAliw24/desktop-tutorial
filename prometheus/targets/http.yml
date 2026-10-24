@@ -1,0 +1,3 @@
+# Websites to monitor (uptime, response time, SSL expiry). Picked up automatically on save.
+- targets:
+    - https://example.com

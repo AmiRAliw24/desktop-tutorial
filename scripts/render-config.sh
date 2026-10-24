@@ -1,11 +1,23 @@
 #!/usr/bin/env bash
 # Renders alertmanager/alertmanager.yml from the template using values in .env.
+# Without Telegram credentials, alerts are still evaluated and visible in Grafana/Prometheus
+# but are not delivered anywhere.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 [ -f .env ] || { echo "Missing .env - copy .env.example to .env and fill it in." >&2; exit 1; }
 set -a; . ./.env; set +a
-: "${TELEGRAM_BOT_TOKEN:?}" "${TELEGRAM_CHAT_ID:?}"
+
+if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+  cat > alertmanager/alertmanager.yml <<'YAML'
+route:
+  receiver: none
+receivers:
+  - name: none
+YAML
+  echo "Wrote alertmanager/alertmanager.yml (no Telegram configured, notifications disabled)"
+  exit 0
+fi
 
 # Replace only our two placeholders so Alertmanager's {{ }} templates stay untouched.
 tmpl=$(<alertmanager/alertmanager.yml.tmpl)

@@ -26,14 +26,13 @@ scrape_configs:
     static_configs:
       - targets: [cadvisor:8080]
 
-  # Uptime / SSL checks. Edit the target list to match your sites.
+  # Uptime / SSL checks. Targets live in prometheus/targets/http.yml (reloaded automatically).
   - job_name: blackbox-http
     metrics_path: /probe
     params:
       module: [http_2xx]
-    static_configs:
-      - targets:
-          - https://example.com
+    file_sd_configs:
+      - files: [/etc/prometheus/targets/http.yml]
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
@@ -42,13 +41,13 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox:9115
 
-  # TCP port checks (e.g. SSH, database). Edit as needed.
+  # TCP port checks (e.g. SSH, database). Targets live in prometheus/targets/tcp.yml.
   - job_name: blackbox-tcp
     metrics_path: /probe
     params:
       module: [tcp_connect]
-    static_configs:
-      - targets: []
+    file_sd_configs:
+      - files: [/etc/prometheus/targets/tcp.yml]
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

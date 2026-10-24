@@ -37,6 +37,7 @@ PUBLIC_FILES = {
     "/login": ("login.html", "text/html; charset=utf-8"),
     "/login.js": ("login.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
+    "/fonts.css": ("fonts.css", "text/css; charset=utf-8"),
     "/favicon.svg": ("favicon.svg", "image/svg+xml"),
 }
 PRIVATE_FILES = {
@@ -51,7 +52,7 @@ ICONS = {
 }
 
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-       "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+       "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 WRITE_HINT = ("The panel cannot write its configuration files (permission denied). On the server run: "
               "chown -R 65534:65534 /opt/server-monitoring/data /opt/server-monitoring/prometheus/targets "
               "/opt/server-monitoring/prometheus/rules /opt/server-monitoring/alertmanager")

@@ -24,6 +24,7 @@ FILES=(
   panel/static/app.js:644
   panel/static/login.js:644
   panel/static/style.css:644
+  panel/static/fonts.css:644
   panel/static/favicon.svg:644
 )
 

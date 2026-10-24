@@ -65,7 +65,10 @@ def node_selector(instance, net=False):
 def api_instances(_q):
     rows = vector('up{job="node"}')
     names = {m.get("instance", ""): m.get("instance_name", "") for m, _ in rows}
-    return {"instances": sorted(set(names) - {""}), "names": {k: v for k, v in names.items() if k and v}}
+    live = {m.get("instance", "") for m, v in rows if v}
+    # Reachable servers first, so the panel opens on one that actually has data.
+    order = sorted(set(names) - {""}, key=lambda i: (i not in live, i))
+    return {"instances": order, "names": {k: v for k, v in names.items() if k and v}}
 
 
 def api_overview(q):

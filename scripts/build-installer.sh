@@ -14,9 +14,6 @@ FILES=(
   prometheus/rules/alerts.yml:644
   alertmanager/alertmanager.yml.tmpl:644
   blackbox/blackbox.yml:644
-  grafana/provisioning/datasources/prometheus.yml:644
-  grafana/provisioning/dashboards/dashboards.yml:644
-  grafana/dashboards/server-overview.json:644
   scripts/render-config.sh:755
   panel/server.py:644
   panel/static/index.html:644

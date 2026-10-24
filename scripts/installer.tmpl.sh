@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Server monitoring installer - single self-contained file.
-# Installs Docker (if missing), then deploys Prometheus + Grafana + Alertmanager +
+# Installs Docker (if missing), then deploys the monitoring panel + Prometheus + Alertmanager +
 # node_exporter + cAdvisor + Blackbox exporter under /opt/server-monitoring.
 #
 # Usage (as root):
@@ -12,7 +12,7 @@
 #   bash install.sh --uninstall     # stop and remove containers (keeps data volumes)
 #   bash install.sh --purge         # also delete data volumes and the install dir
 #
-# Optional env vars: INSTALL_DIR, GRAFANA_ADMIN_USER, GRAFANA_ADMIN_PASSWORD, GRAFANA_BIND, PANEL_PORT, GRAFANA_PORT,
+# Optional env vars: INSTALL_DIR, PANEL_USER, PANEL_PASSWORD, PANEL_BIND, PANEL_PORT,
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SITES (comma-separated URLs), PROMETHEUS_RETENTION
 set -euo pipefail
 
@@ -118,10 +118,29 @@ choose_port() {
   else echo "$var='$p'" >> "$INSTALL_DIR/.env"; fi
 }
 
-# Older installs used 8080 for the panel and 3000 for Grafana; the panel now owns 3000.
-migrate_ports() {
-  grep -q '^GRAFANA_PORT=' "$INSTALL_DIR/.env" && return 0
-  if grep -q "^PANEL_PORT='8080'" "$INSTALL_DIR/.env"; then sed -i "s/^PANEL_PORT=.*/PANEL_PORT='3000'/" "$INSTALL_DIR/.env"; fi
+# Older installs kept the login under GRAFANA_* names and also ran Grafana, which is gone now.
+# Copy the values to the PANEL_* names, move an old default panel port, drop the stale keys.
+migrate_env() {
+  local env="$INSTALL_DIR/.env"
+  set -a; . "$env"; set +a
+  add_key() { grep -q "^$1=" "$env" || echo "$1='$2'" >> "$env"; }
+  if ! grep -q '^PANEL_PASSWORD=' "$env"; then
+    [ -n "${GRAFANA_ADMIN_PASSWORD:-}" ] || die "No password found in $env - set PANEL_PASSWORD there and re-run."
+    add_key PANEL_PASSWORD "$GRAFANA_ADMIN_PASSWORD"
+  fi
+  add_key PANEL_USER "${GRAFANA_ADMIN_USER:-admin}"
+  add_key PANEL_BIND "${GRAFANA_BIND:-0.0.0.0}"
+  if grep -q "^PANEL_PORT='8080'" "$env"; then sed -i "s/^PANEL_PORT=.*/PANEL_PORT='3000'/" "$env"; fi
+  sed -i '/^GRAFANA_/d' "$env"
+}
+
+# Grafana was removed from the stack: drop its old container so its port is released.
+remove_legacy_grafana() {
+  local ids
+  ids=$(docker ps -aq --filter "label=com.docker.compose.project=server-monitoring" --filter "label=com.docker.compose.service=grafana" 2>/dev/null || true)
+  [ -z "$ids" ] && return 0
+  log "Removing the old Grafana container (the panel replaces it)"
+  docker rm -f $ids >/dev/null
 }
 
 # ---------------------------------------------------------------- main
@@ -129,13 +148,17 @@ FRESH=1; [ -f "$INSTALL_DIR/.env" ] && FRESH=0
 
 if [ "$FRESH" = 1 ]; then
   log "New installation in $INSTALL_DIR"
-  ask GRAFANA_ADMIN_USER "Grafana admin username" admin
-  ask GRAFANA_ADMIN_PASSWORD "Grafana admin password (empty = generate random)" ""
-  if [ -z "$GRAFANA_ADMIN_PASSWORD" ]; then
-    GRAFANA_ADMIN_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
+  # Older docs used GRAFANA_* names for these; accept them as fallbacks.
+  PANEL_USER=${PANEL_USER:-${GRAFANA_ADMIN_USER:-}}
+  PANEL_PASSWORD=${PANEL_PASSWORD:-${GRAFANA_ADMIN_PASSWORD:-}}
+  PANEL_BIND=${PANEL_BIND:-${GRAFANA_BIND:-}}
+  ask PANEL_USER "Panel username" admin
+  ask PANEL_PASSWORD "Panel password (empty = generate random)" ""
+  if [ -z "$PANEL_PASSWORD" ]; then
+    PANEL_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
     GENERATED_PW=1
   fi
-  ask GRAFANA_BIND "Panel and Grafana listen address (0.0.0.0 = reachable from any network, 127.0.0.1 = local only)" 0.0.0.0
+  ask PANEL_BIND "Panel listen address (0.0.0.0 = reachable from any network, 127.0.0.1 = local only)" 0.0.0.0
   ask TELEGRAM_BOT_TOKEN "Telegram bot token for alerts (empty = skip)" ""
   TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
   [ -n "$TELEGRAM_BOT_TOKEN" ] && ask TELEGRAM_CHAT_ID "Telegram chat id" ""
@@ -150,18 +173,16 @@ extract_files
 if [ "$FRESH" = 1 ]; then
   # Values are single-quoted: .env is read by both bash and Docker Compose, and single quotes
   # keep characters like $ and spaces literal in both.
-  for v in GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD GRAFANA_BIND PANEL_PORT GRAFANA_PORT TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID SITES; do
+  for v in PANEL_USER PANEL_PASSWORD PANEL_BIND PANEL_PORT TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID SITES; do
     case "${!v:-}" in *\'*|*$'\n'*) die "$v must not contain single quotes or newlines." ;; esac
   done
-  [[ ${PANEL_PORT:-3000} =~ ^[0-9]{2,5}$ && ${GRAFANA_PORT:-3001} =~ ^[0-9]{2,5}$ ]] || die "PANEL_PORT and GRAFANA_PORT must be numbers."
+  [[ ${PANEL_PORT:-3000} =~ ^[0-9]{2,5}$ ]] || die "PANEL_PORT must be a number."
   umask 077
   cat > "$INSTALL_DIR/.env" <<ENV
-GRAFANA_ADMIN_USER='$GRAFANA_ADMIN_USER'
-GRAFANA_ADMIN_PASSWORD='$GRAFANA_ADMIN_PASSWORD'
-GRAFANA_BIND='$GRAFANA_BIND'
-PANEL_BIND='$GRAFANA_BIND'
+PANEL_USER='$PANEL_USER'
+PANEL_PASSWORD='$PANEL_PASSWORD'
+PANEL_BIND='$PANEL_BIND'
 PANEL_PORT='${PANEL_PORT:-3000}'
-GRAFANA_PORT='${GRAFANA_PORT:-3001}'
 PROMETHEUS_RETENTION='${PROMETHEUS_RETENTION:-30d}'
 TELEGRAM_BOT_TOKEN='${TELEGRAM_BOT_TOKEN:-}'
 TELEGRAM_CHAT_ID='${TELEGRAM_CHAT_ID:-}'
@@ -179,11 +200,10 @@ ENV
   fi
 fi
 
+if [ "$FRESH" = 0 ]; then migrate_env; fi
 "$INSTALL_DIR/scripts/render-config.sh"
-migrate_ports
 
 if [ "$NO_START" = 1 ]; then
-  choose_port GRAFANA_PORT grafana 3000 3001
   choose_port PANEL_PORT panel 8080 3000
   log "Files written to $INSTALL_DIR (--no-start given, containers not started)."
   exit 0
@@ -192,9 +212,7 @@ fi
 ensure_docker
 log "Pulling images and starting the stack"
 compose pull --quiet < /dev/null
-# Start Grafana first so that, on upgrades, it releases port 3000 before the panel claims it.
-choose_port GRAFANA_PORT grafana 3000 3001
-compose up -d --no-deps grafana < /dev/null
+remove_legacy_grafana
 choose_port PANEL_PORT panel 8080 3000
 compose up -d --remove-orphans < /dev/null
 # Config files are bind-mounted, so running containers need a nudge to re-read them.
@@ -203,30 +221,29 @@ compose kill -s SIGHUP prometheus alertmanager < /dev/null >/dev/null 2>&1 || tr
 compose restart panel < /dev/null >/dev/null 2>&1 || true
 
 set -a; . "$INSTALL_DIR/.env"; set +a
-log "Waiting for Grafana to become healthy"
+log "Waiting for the panel to become healthy"
 healthy=0
 for _ in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:${GRAFANA_PORT:-3001}/api/health" >/dev/null 2>&1; then healthy=1; break; fi
+  if curl -fsS "http://127.0.0.1:${PANEL_PORT:-3000}/healthz" >/dev/null 2>&1; then healthy=1; break; fi
   sleep 2
 done
-[ "$healthy" = 1 ] || warn "Grafana did not respond in 2 minutes. Check: docker compose --project-directory $INSTALL_DIR logs grafana"
+[ "$healthy" = 1 ] || warn "The panel did not respond in 2 minutes. Check: docker compose --project-directory $INSTALL_DIR logs panel"
 
-set -a; . "$INSTALL_DIR/.env"; set +a
 ip=$(hostname -I 2>/dev/null | awk '{print $1}'); ip=${ip:-<server-ip>}
 echo
 log "Done."
-PANEL_PORT=${PANEL_PORT:-3000}; GRAFANA_PORT=${GRAFANA_PORT:-3001}
-if [ "$GRAFANA_BIND" = 127.0.0.1 ]; then
-  echo "  Services are local-only. From your computer run:"
-  echo "    ssh -L $PANEL_PORT:127.0.0.1:$PANEL_PORT -L $GRAFANA_PORT:127.0.0.1:$GRAFANA_PORT root@$ip"
-  echo "  then open http://localhost:$PANEL_PORT (panel) and http://localhost:$GRAFANA_PORT (Grafana)"
+PANEL_PORT=${PANEL_PORT:-3000}
+if [ "${PANEL_BIND:-0.0.0.0}" = 127.0.0.1 ]; then
+  echo "  The panel is local-only. From your computer run:  ssh -L $PANEL_PORT:127.0.0.1:$PANEL_PORT root@$ip"
+  echo "  then open http://localhost:$PANEL_PORT"
 else
-  echo "  Panel:    http://$ip:$PANEL_PORT"
-  echo "  Grafana:  http://$ip:$GRAFANA_PORT"
-  echo "  (open TCP ports $PANEL_PORT and $GRAFANA_PORT in your firewall; put HTTPS in front for production)"
+  echo "  Panel:    http://$ip:$PANEL_PORT   (open TCP port $PANEL_PORT in your firewall; put HTTPS in front for production)"
 fi
-echo "  Login:    $GRAFANA_ADMIN_USER / ${GENERATED_PW:+$GRAFANA_ADMIN_PASSWORD}${GENERATED_PW:-(the password you chose)}   (same for panel and Grafana)"
+echo "  Login:    $PANEL_USER / ${GENERATED_PW:+$PANEL_PASSWORD}${GENERATED_PW:-(the password you chose)}"
 [ -n "${GENERATED_PW:-}" ] && echo "  (saved in $INSTALL_DIR/.env)"
+if docker volume inspect server-monitoring_grafana_data >/dev/null 2>&1; then
+  echo "  Old Grafana data is still on disk; remove it with: docker volume rm server-monitoring_grafana_data"
+fi
 echo "  Websites: edit $INSTALL_DIR/prometheus/targets/http.yml (no restart needed)"
 echo "  Manage:   docker compose --project-directory $INSTALL_DIR ps | logs | restart"
 [ -z "${TELEGRAM_BOT_TOKEN:-}" ] && echo "  Alerts:   Telegram not configured - fill TELEGRAM_* in $INSTALL_DIR/.env, then run $INSTALL_DIR/scripts/render-config.sh && docker compose --project-directory $INSTALL_DIR restart alertmanager"

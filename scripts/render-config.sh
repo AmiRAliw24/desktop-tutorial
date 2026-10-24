@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Renders alertmanager/alertmanager.yml from the template using values in .env.
-# Without Telegram credentials, alerts are still evaluated and visible in Grafana/Prometheus
+# Without Telegram credentials, alerts are still evaluated and visible in the panel and Prometheus
 # but are not delivered anywhere.
 set -euo pipefail
 cd "$(dirname "$0")/.."

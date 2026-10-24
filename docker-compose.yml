@@ -103,10 +103,9 @@ services:
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       PROMETHEUS_URL: http://prometheus:9090
-      PANEL_USER: ${GRAFANA_ADMIN_USER:-admin}
-      PANEL_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      PANEL_USER: ${PANEL_USER:-admin}
+      PANEL_PASSWORD: ${PANEL_PASSWORD:?set PANEL_PASSWORD in .env}
       PANEL_LISTEN_PORT: "8080"
-      GRAFANA_PORT: ${GRAFANA_PORT:-3001}
     volumes:
       - ./panel:/app:ro
     ports:
@@ -119,26 +118,9 @@ services:
     depends_on: [prometheus]
     networks: [monitoring]
 
-  grafana:
-    image: grafana/grafana:11.3.0
-    restart: unless-stopped
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - grafana_data:/var/lib/grafana
-    ports:
-      - "${GRAFANA_BIND:-0.0.0.0}:${GRAFANA_PORT:-3001}:3000"
-    depends_on: [prometheus]
-    networks: [monitoring]
-
 volumes:
   prometheus_data:
   alertmanager_data:
-  grafana_data:
 
 networks:
   monitoring:

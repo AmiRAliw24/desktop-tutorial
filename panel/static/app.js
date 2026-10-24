@@ -4,7 +4,7 @@
   // ---------------------------------------------------------------- i18n
   const T = {
     en: {
-      title: "Server Monitor", monitors: "Monitors", refresh: "Refresh", grafana: "Grafana", logout: "Logout",
+      title: "Server Monitor", monitors: "Monitors", refresh: "Refresh", logout: "Logout",
       lang_switch: "فارسی", host: "Host",
       cpu: "CPU", memory: "Memory", disk: "Disk", uptime: "Uptime", load: "Load average",
       net_down: "Network in", net_up: "Network out", containers: "Containers", targets: "Targets up",
@@ -34,7 +34,7 @@
       t_dark: "Switch to light theme", t_light: "Switch to dark theme",
     },
     fa: {
-      title: "مانیتورینگ سرور", monitors: "مانیتورها", refresh: "بروزرسانی", grafana: "گرافانا", logout: "خروج",
+      title: "مانیتورینگ سرور", monitors: "مانیتورها", refresh: "بروزرسانی", logout: "خروج",
       lang_switch: "English", host: "سرور",
       cpu: "پردازنده", memory: "حافظه (رم)", disk: "دیسک", uptime: "مدت روشن بودن", load: "میانگین بار",
       net_down: "دریافت شبکه", net_up: "ارسال شبکه", containers: "کانتینرها", targets: "تارگت‌های فعال",
@@ -78,7 +78,6 @@
     instances: [],
     view: "overview",
     overview: null,
-    grafanaPort: 3001,
     renderId: 0,
   };
   const t = (k) => T[state.lang][k] ?? k;
@@ -173,8 +172,6 @@
     $("theme").title = $("theme").getAttribute("aria-label");
     $("lang").innerHTML = `${icon("globe")}<span class="txt">${esc(t("lang_switch"))}</span>`;
     $("refresh").innerHTML = `${icon("refresh")}<span class="txt">${esc(t("refresh"))}</span>`;
-    $("grafana").innerHTML = `${icon("chart")}<span class="txt">${esc(t("grafana"))}</span>`;
-    $("grafana").href = `${location.protocol}//${location.hostname}:${state.grafanaPort}/d/server-overview`;
     $("logout").innerHTML = `${icon("logout")}<span class="txt">${esc(t("logout"))}</span>`;
     renderNav();
   }
@@ -483,7 +480,6 @@
   window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.view === "overview") renderView(false); }, 300); });
 
   applyLocale();
-  api("/api/config").then((c) => { state.grafanaPort = c.grafana_port; applyLocale(); }).catch(() => { /* keep default */ });
   state.view = VIEWS.some((v) => v.id === location.hash.slice(1)) ? location.hash.slice(1) : "overview";
   renderNav();
   tick(true);

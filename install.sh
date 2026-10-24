@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Server monitoring installer - single self-contained file.
-# Installs Docker (if missing), then deploys Prometheus + Grafana + Alertmanager +
+# Installs Docker (if missing), then deploys the monitoring panel + Prometheus + Alertmanager +
 # node_exporter + cAdvisor + Blackbox exporter under /opt/server-monitoring.
 #
 # Usage (as root):
@@ -12,7 +12,7 @@
 #   bash install.sh --uninstall     # stop and remove containers (keeps data volumes)
 #   bash install.sh --purge         # also delete data volumes and the install dir
 #
-# Optional env vars: INSTALL_DIR, GRAFANA_ADMIN_USER, GRAFANA_ADMIN_PASSWORD, GRAFANA_BIND, PANEL_PORT, GRAFANA_PORT,
+# Optional env vars: INSTALL_DIR, PANEL_USER, PANEL_PASSWORD, PANEL_BIND, PANEL_PORT,
 #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SITES (comma-separated URLs), PROMETHEUS_RETENTION
 set -euo pipefail
 
@@ -181,10 +181,9 @@ services:
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       PROMETHEUS_URL: http://prometheus:9090
-      PANEL_USER: ${GRAFANA_ADMIN_USER:-admin}
-      PANEL_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      PANEL_USER: ${PANEL_USER:-admin}
+      PANEL_PASSWORD: ${PANEL_PASSWORD:?set PANEL_PASSWORD in .env}
       PANEL_LISTEN_PORT: "8080"
-      GRAFANA_PORT: ${GRAFANA_PORT:-3001}
     volumes:
       - ./panel:/app:ro
     ports:
@@ -197,49 +196,28 @@ services:
     depends_on: [prometheus]
     networks: [monitoring]
 
-  grafana:
-    image: grafana/grafana:11.3.0
-    restart: unless-stopped
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
-      - grafana_data:/var/lib/grafana
-    ports:
-      - "${GRAFANA_BIND:-0.0.0.0}:${GRAFANA_PORT:-3001}:3000"
-    depends_on: [prometheus]
-    networks: [monitoring]
-
 volumes:
   prometheus_data:
   alertmanager_data:
-  grafana_data:
 
 networks:
   monitoring:
 __MONITORING_EOF__
   write_file .env.example 644 <<'__MONITORING_EOF__'
-GRAFANA_ADMIN_USER=admin
-GRAFANA_ADMIN_PASSWORD=change-me
+# Login for the web panel
+PANEL_USER=admin
+PANEL_PASSWORD=change-me
+
+# 0.0.0.0   = panel reachable from any network on PANEL_PORT (open the port in your firewall)
+# 127.0.0.1 = local only (use an SSH tunnel or a reverse proxy)
+PANEL_BIND=0.0.0.0
+PANEL_PORT=3000
+
 PROMETHEUS_RETENTION=30d
 
 # Telegram alerts: create a bot with @BotFather, then get your chat id from @userinfobot
 TELEGRAM_BOT_TOKEN=123456:ABC-your-token
 TELEGRAM_CHAT_ID=123456789
-
-# 0.0.0.0   = Grafana reachable from any network on port 3000 (open the port in your firewall)
-# 127.0.0.1 = local only (use an SSH tunnel or reverse proxy)
-GRAFANA_BIND=0.0.0.0
-
-# Web panel (the main dashboard). Login = the Grafana admin user/password above.
-PANEL_BIND=0.0.0.0
-PANEL_PORT=3000
-
-# Grafana moved to 3001 so the panel can use port 3000.
-GRAFANA_PORT=3001
 __MONITORING_EOF__
   write_file .gitignore 644 <<'__MONITORING_EOF__'
 .env
@@ -248,27 +226,27 @@ __MONITORING_EOF__
   write_file README.md 644 <<'__MONITORING_EOF__'
 # مانیتورینگ کامل سرور
 
-استک آماده‌ی مانیتورینگ با Docker Compose:
+استک آماده‌ی مانیتورینگ با Docker Compose و یک پنل وب اختصاصی:
 
 | سرویس | کار |
 |---|---|
+| **پنل وب** | داشبورد اصلی با ظاهر اختصاصی (پورت 3000) |
 | **Prometheus** | جمع‌آوری و ذخیره متریک‌ها (۳۰ روز) |
-| **پنل وب** | داشبورد اصلی و سبک با ظاهر اختصاصی (پورت 3000) |
-| **Grafana** | نمودارهای پیشرفته (Server Overview به‌صورت خودکار نصب می‌شود) |
 | **Alertmanager** | ارسال هشدار به تلگرام |
-| **node_exporter** | متریک‌های سیستم: CPU، رم، دیسک، شبکه، load |
+| **node_exporter** | متریک‌های سیستم: CPU، رم، دیسک، load |
+| **node-net** | آمار واقعی کارت‌های شبکه‌ی سرور |
 | **cAdvisor** | متریک کانتینرهای Docker |
 | **Blackbox exporter** | چک آپتایم سایت‌ها، پورت‌ها و انقضای SSL |
 
-## پنل وب (داشبورد اصلی)
+## پنل وب
 
-علاوه بر Grafana، یک پنل وب اختصاصی نصب می‌شود (پوشه `panel/`): تم تیره/روشن، فارسی و انگلیسی (با راست‌به‌چپ)، کارت‌های آماری زنده، و بخش‌های نمای کلی، کانتینرها، سایت‌ها، دیسک‌ها، شبکه، تارگت‌ها و هشدارها.
+پوشه‌ی `panel/`: تم تیره/روشن، فارسی و انگلیسی (با راست‌به‌چپ)، کارت‌های آماری زنده، نمودار منابع، و بخش‌های نمای کلی، کانتینرها، سایت‌ها، دیسک‌ها، شبکه، تارگت‌ها و هشدارها.
 
-- آدرس: `http://IP-SERVER:3000` (پورت با `PANEL_PORT` و پورت Grafana با `GRAFANA_PORT` در `.env` عوض می‌شود؛ اگر پورتی اشغال باشد، نصب‌کننده خودش پورت آزاد بعدی را انتخاب می‌کند)
-- ورود: همان نام کاربری و رمز Grafana (`GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`)
+- آدرس: `http://IP-SERVER:3000` (پورت با `PANEL_PORT` در `.env` عوض می‌شود؛ اگر پورتی اشغال باشد، نصب‌کننده خودش پورت آزاد بعدی را انتخاب می‌کند)
+- ورود: `PANEL_USER` و `PANEL_PASSWORD` در `.env`
 - داده‌ها را فقط‌خواندنی از Prometheus می‌گیرد؛ کوئیری دلخواه از بیرون پذیرفته نمی‌شود.
 - ورود اشتباه با تأخیر یک‌ثانیه‌ای رد می‌شود، کوکی نشست `HttpOnly` است و با عوض شدن رمز همه‌ی نشست‌ها باطل می‌شوند.
-- پورت پنل (3000) و Grafana (3001) باید در فایروال سرور و پنل هاستینگ باز باشند.
+- پورت پنل باید در فایروال سرور و پنل هاستینگ باز باشد. Prometheus و Alertmanager فقط روی `127.0.0.1` باز می‌شوند.
 - برای HTTPS یک reverse proxy (مثلاً Caddy) جلوی پورت 3000 بگذارید.
 
 ## نصب یک‌خطی
@@ -279,10 +257,10 @@ __MONITORING_EOF__
 curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/main/install.sh | sudo bash
 ```
 
-بدون سؤال، با متغیرهای محیطی (به `-E` یا `env` دقت کنید تا متغیرها به sudo برسند):
+بدون سؤال، با متغیرهای محیطی (به `env` دقت کنید تا متغیرها به sudo برسند):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/main/install.sh | sudo env GRAFANA_ADMIN_PASSWORD='...' SITES='https://a.com' bash -s -- -y
+curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/main/install.sh | sudo env PANEL_PASSWORD='...' SITES='https://a.com' bash -s -- -y
 ```
 
 این آدرس فقط وقتی کار می‌کند که ریپو public باشد و `install.sh` روی برنچ `main` قرار گرفته باشد. اگر ریپو private است، فایل را با `scp` کپی کنید (روش بعدی).
@@ -295,12 +273,12 @@ curl -fsSL https://raw.githubusercontent.com/AmiRAliw24/desktop-tutorial/main/in
 sudo bash install.sh
 ```
 
-نصب‌کننده خودش Docker را (اگر نباشد) نصب می‌کند، همه فایل‌ها را در `/opt/server-monitoring` می‌سازد و استک را بالا می‌آورد. چند سؤال می‌پرسد: رمز Grafana (خالی = رمز تصادفی)، آدرس listen (پیش‌فرض `0.0.0.0`، یعنی از هر شبکه‌ای)، توکن تلگرام (اختیاری) و لیست سایت‌ها (اختیاری).
+نصب‌کننده خودش Docker را (اگر نباشد) نصب می‌کند، همه فایل‌ها را در `/opt/server-monitoring` می‌سازد و استک را بالا می‌آورد. چند سؤال می‌پرسد: نام کاربری و رمز پنل (رمز خالی = رمز تصادفی)، آدرس listen (پیش‌فرض `0.0.0.0`، یعنی از هر شبکه‌ای)، توکن تلگرام (اختیاری) و لیست سایت‌ها (اختیاری).
 
 بدون سؤال (برای اسکریپت و اتوماسیون):
 
 ```bash
-sudo GRAFANA_ADMIN_PASSWORD='...' GRAFANA_BIND=0.0.0.0 \
+sudo env PANEL_PASSWORD='...' PANEL_BIND=0.0.0.0 \
      TELEGRAM_BOT_TOKEN='...' TELEGRAM_CHAT_ID='...' \
      SITES='https://a.com,https://b.org' bash install.sh -y
 ```
@@ -312,22 +290,29 @@ sudo GRAFANA_ADMIN_PASSWORD='...' GRAFANA_BIND=0.0.0.0 \
 | `--uninstall` | کانتینرها را حذف کن (داده‌ها می‌مانند) |
 | `--purge` | کانتینرها، داده‌ها و پوشه نصب را کامل حذف کن |
 
-اجرای دوباره `install.sh` امن است: فایل‌ها آپدیت می‌شوند ولی `.env` و لیست سایت‌های شما دست نمی‌خورد.
+اجرای دوباره `install.sh` امن است: فایل‌ها آپدیت می‌شوند ولی `.env`، لیست سایت‌ها و لیست سرورهای شما دست نمی‌خورد، و پنل بعد از آپدیت ری‌استارت می‌شود.
 
-اگر Grafana را روی `127.0.0.1` بگذارید، از کامپیوتر خودتان با `ssh -L 3000:127.0.0.1:3000 -L 3001:127.0.0.1:3001 root@SERVER` وصل شوید. با `0.0.0.0` (پیش‌فرض) پورت‌های 3000 و 3001 باید در فایروال سرور و پنل هاستینگ باز باشد، و برای محیط واقعی حتماً HTTPS جلویش بگذارید.
+اگر پنل را روی `127.0.0.1` بگذارید، از کامپیوتر خودتان با `ssh -L 3000:127.0.0.1:3000 root@SERVER` وصل شوید. با `0.0.0.0` (پیش‌فرض) پورت 3000 باید در فایروال سرور و پنل هاستینگ باز باشد، و برای محیط واقعی حتماً HTTPS جلویش بگذارید.
 
 > `install.sh` از روی فایل‌های همین ریپو ساخته می‌شود. بعد از تغییر هر فایل، `./scripts/build-installer.sh` را اجرا کنید.
+
+### ارتقا از نسخه‌ی قدیمی (با Grafana)
+
+Grafana از استک حذف شده است. با اجرای دوباره‌ی `install.sh` روی سرور قدیمی: لاگین قبلی (`GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`) به `PANEL_USER` / `PANEL_PASSWORD` منتقل می‌شود، کانتینر Grafana حذف می‌شود و پنل روی پورت 3000 می‌آید. داده‌های قدیمی Grafana روی دیسک می‌مانند؛ اگر لازم ندارید:
+
+```bash
+docker volume rm server-monitoring_grafana_data
+```
 
 ## راه‌اندازی دستی (بدون نصب‌کننده)
 
 ```bash
-cp .env.example .env        # رمز Grafana و توکن/چت‌آیدی تلگرام را بنویسید
+cp .env.example .env        # رمز پنل و توکن/چت‌آیدی تلگرام را بنویسید
 ./scripts/render-config.sh  # ساخت alertmanager/alertmanager.yml از روی .env
 docker compose up -d
 ```
 
 - پنل وب: http://localhost:3000
-- Grafana: http://localhost:3001
 - Prometheus: http://localhost:9090
 - Alertmanager: http://localhost:9093
 
@@ -335,16 +320,15 @@ docker compose up -d
 
 - **سایت‌ها و پورت‌ها:** فایل `prometheus/targets/http.yml` (سایت‌ها) و `prometheus/targets/tcp.yml` (پورت‌ها) را ویرایش کنید؛ بعد از ذخیره خودکار اعمال می‌شود و ری‌استارت لازم نیست.
 - **سرور اضافه:** `node_exporter` را روی سرور دیگر نصب کنید، پورت 9100 را فقط برای IP سرور مانیتورینگ در فایروال باز کنید و آدرس `IP:9100` را در `prometheus/targets/nodes.yml` بنویسید (بعد از ذخیره خودکار اعمال می‌شود و با اجرای دوباره‌ی `install.sh` پاک نمی‌شود).
-- **هشدارها:** `prometheus/rules/alerts.yml` شامل ۱۲ قانون است: خاموشی هدف، CPU/رم/دیسک بالا، پر شدن دیسک تا ۲۴ ساعت آینده، load، ری‌استارت سرور، مصرف کانتینر، قطعی سایت، کندی پاسخ و انقضای SSL (کمتر از ۱۴ روز).
+- **هشدارها:** `prometheus/rules/alerts.yml` شامل ۱۲ قانون است: خاموشی هدف، CPU/رم/دیسک بالا، پر شدن دیسک تا ۲۴ ساعت آینده، load، ری‌استارت سرور، مصرف کانتینر، قطعی سایت، کندی پاسخ و انقضای SSL (کمتر از ۱۴ روز). هشدارهای فعال در تب Alerts پنل دیده می‌شوند.
 - **ایمیل یا Slack:** در `alertmanager/alertmanager.yml.tmpl` یک receiver جدید اضافه کنید.
 
 ## آمار شبکه
 
-`node_exporter` داخل کانتینر فقط شبکه‌ی خود کانتینر را می‌بیند، نه کارت‌های واقعی سرور. به همین دلیل سرویس جدا `node-net` (همان `node_exporter` با `privileged` و خواندن از `/proc/1`، یعنی namespace شبکه‌ی خود سرور) آمار واقعی کارت‌ها (مثل `eth0`) را می‌دهد و `node_exporter` اصلی آمار شبکه را نمی‌دهد تا دوبار شمرده نشود. اگر جدول Network خالی بود، این را بزنید:
+`node_exporter` داخل کانتینر فقط شبکه‌ی خود کانتینر را می‌بیند، نه کارت‌های واقعی سرور. به همین دلیل سرویس جدا `node-net` (همان `node_exporter` با `privileged` و خواندن از `/proc/1`، یعنی namespace شبکه‌ی خود سرور) آمار واقعی کارت‌ها (مثل `eth0`) را می‌دهد و `node_exporter` اصلی آمار شبکه را نمی‌دهد تا دوبار شمرده نشود. اگر جدول Network خالی بود، پنل بالای جدول دلیلش را می‌نویسد؛ برای جزئیات:
 
 ```bash
 docker compose logs --tail 20 node-net
-curl -s http://$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' server-monitoring-node-net-1):9100/metrics | grep '^node_network_receive_bytes_total'
 ```
 
 ## تست هشدار
@@ -558,732 +542,10 @@ modules:
     prober: tcp
     timeout: 5s
 __MONITORING_EOF__
-  write_file grafana/provisioning/datasources/prometheus.yml 644 <<'__MONITORING_EOF__'
-apiVersion: 1
-datasources:
-  - name: Prometheus
-    uid: prometheus
-    type: prometheus
-    access: proxy
-    url: http://prometheus:9090
-    isDefault: true
-__MONITORING_EOF__
-  write_file grafana/provisioning/dashboards/dashboards.yml 644 <<'__MONITORING_EOF__'
-apiVersion: 1
-providers:
-  - name: default
-    type: file
-    updateIntervalSeconds: 30
-    options:
-      path: /var/lib/grafana/dashboards
-__MONITORING_EOF__
-  write_file grafana/dashboards/server-overview.json 644 <<'__MONITORING_EOF__'
-{
-  "uid": "server-overview",
-  "title": "Server Overview",
-  "tags": [
-    "monitoring"
-  ],
-  "timezone": "browser",
-  "refresh": "30s",
-  "schemaVersion": 39,
-  "version": 1,
-  "time": {
-    "from": "now-6h",
-    "to": "now"
-  },
-  "panels": [
-    {
-      "id": 1,
-      "type": "stat",
-      "title": "CPU usage",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "min": 0,
-          "max": 100,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 70
-              },
-              {
-                "color": "red",
-                "value": 90
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "100 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100",
-          "legendFormat": ""
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "background"
-      }
-    },
-    {
-      "id": 2,
-      "type": "stat",
-      "title": "Memory usage",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 4,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "min": 0,
-          "max": 100,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 70
-              },
-              {
-                "color": "red",
-                "value": 90
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
-          "legendFormat": ""
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "background"
-      }
-    },
-    {
-      "id": 3,
-      "type": "stat",
-      "title": "Root disk usage",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 8,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "min": 0,
-          "max": 100,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "yellow",
-                "value": 70
-              },
-              {
-                "color": "red",
-                "value": 90
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "(1 - node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"}) * 100",
-          "legendFormat": ""
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "background"
-      }
-    },
-    {
-      "id": 4,
-      "type": "stat",
-      "title": "Uptime",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "time() - node_boot_time_seconds",
-          "legendFormat": ""
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "background"
-      }
-    },
-    {
-      "id": 5,
-      "type": "stat",
-      "title": "Targets up",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "sum(up)",
-          "legendFormat": "up"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "B",
-          "expr": "count(up)",
-          "legendFormat": "total"
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "background"
-      }
-    },
-    {
-      "id": 6,
-      "type": "stat",
-      "title": "Firing alerts",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 20,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "count(ALERTS{alertstate=\"firing\"}) or vector(0)",
-          "legendFormat": ""
-        }
-      ],
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "background"
-      }
-    },
-    {
-      "id": 7,
-      "type": "timeseries",
-      "title": "CPU by mode",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 4,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "sum by (mode) (rate(node_cpu_seconds_total{mode!=\"idle\"}[5m])) * 100",
-          "legendFormat": "{{mode}}"
-        }
-      ]
-    },
-    {
-      "id": 8,
-      "type": "timeseries",
-      "title": "Memory",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 4,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes",
-          "legendFormat": "used"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "B",
-          "expr": "node_memory_MemTotal_bytes",
-          "legendFormat": "total"
-        }
-      ]
-    },
-    {
-      "id": 9,
-      "type": "timeseries",
-      "title": "Load average",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 12,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "node_load1",
-          "legendFormat": "1m"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "B",
-          "expr": "node_load5",
-          "legendFormat": "5m"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "C",
-          "expr": "node_load15",
-          "legendFormat": "15m"
-        }
-      ]
-    },
-    {
-      "id": 10,
-      "type": "timeseries",
-      "title": "Network traffic",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 12,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "Bps"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "sum(rate(node_network_receive_bytes_total{device!~\"lo|veth.*|docker.*|br-.*\"}[5m]))",
-          "legendFormat": "rx"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "B",
-          "expr": "-sum(rate(node_network_transmit_bytes_total{device!~\"lo|veth.*|docker.*|br-.*\"}[5m]))",
-          "legendFormat": "tx"
-        }
-      ]
-    },
-    {
-      "id": 11,
-      "type": "timeseries",
-      "title": "Disk usage by mountpoint",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 20,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "min": 0,
-          "max": 100
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "(1 - node_filesystem_avail_bytes{fstype!~\"tmpfs|overlay|squashfs\"} / node_filesystem_size_bytes{fstype!~\"tmpfs|overlay|squashfs\"}) * 100",
-          "legendFormat": "{{mountpoint}}"
-        }
-      ]
-    },
-    {
-      "id": 12,
-      "type": "timeseries",
-      "title": "Disk I/O",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 20,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "Bps"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "sum(rate(node_disk_read_bytes_total[5m]))",
-          "legendFormat": "read"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "B",
-          "expr": "sum(rate(node_disk_written_bytes_total[5m]))",
-          "legendFormat": "write"
-        }
-      ]
-    },
-    {
-      "id": 13,
-      "type": "timeseries",
-      "title": "Container CPU",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 28,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name!=\"\"}[5m])) * 100",
-          "legendFormat": "{{name}}"
-        }
-      ]
-    },
-    {
-      "id": 14,
-      "type": "timeseries",
-      "title": "Container memory",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 28,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "sum by (name) (container_memory_working_set_bytes{name!=\"\"})",
-          "legendFormat": "{{name}}"
-        }
-      ]
-    },
-    {
-      "id": 15,
-      "type": "table",
-      "title": "Endpoint checks",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 36,
-        "w": 24,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "A",
-          "expr": "probe_success",
-          "legendFormat": "up"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "B",
-          "expr": "probe_duration_seconds",
-          "legendFormat": "response s"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "refId": "C",
-          "expr": "(probe_ssl_earliest_cert_expiry - time()) / 86400",
-          "legendFormat": "ssl days left"
-        }
-      ]
-    }
-  ]
-}
-__MONITORING_EOF__
   write_file scripts/render-config.sh 755 <<'__MONITORING_EOF__'
 #!/usr/bin/env bash
 # Renders alertmanager/alertmanager.yml from the template using values in .env.
-# Without Telegram credentials, alerts are still evaluated and visible in Grafana/Prometheus
+# Without Telegram credentials, alerts are still evaluated and visible in the panel and Prometheus
 # but are not delivered anywhere.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -1334,7 +596,6 @@ PROM = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090").rstrip("/")
 USER = os.environ.get("PANEL_USER", "admin")
 PASSWORD = os.environ.get("PANEL_PASSWORD", "")
 PORT = int(os.environ.get("PANEL_LISTEN_PORT", "8080"))
-GRAFANA_PORT = int(os.environ.get("GRAFANA_PORT", "3001"))
 STATIC = Path(__file__).parent / "static"
 SESSION_TTL = 7 * 24 * 3600
 COOKIE = "panel_session"
@@ -1433,10 +694,6 @@ def node_selector(instance, net=False):
     return f'{job},instance="{instance}"' if instance else job
 
 # ------------------------------------------------------------------ api handlers
-
-def api_config(_q):
-    return {"grafana_port": GRAFANA_PORT}
-
 
 def api_instances(_q):
     return {"instances": node_instances()}
@@ -1604,7 +861,7 @@ def api_history(q):
     return {"series": series}
 
 
-API = {"/api/config": api_config, "/api/instances": api_instances, "/api/overview": api_overview, "/api/disks": api_disks,
+API = {"/api/instances": api_instances, "/api/overview": api_overview, "/api/disks": api_disks,
        "/api/network": api_network, "/api/containers": api_containers, "/api/websites": api_websites,
        "/api/targets": api_targets, "/api/alerts": api_alerts, "/api/history": api_history}
 
@@ -1724,7 +981,6 @@ __MONITORING_EOF__
         <button class="btn icon" id="theme" type="button" aria-label="Theme"></button>
         <button class="btn" id="lang" type="button"></button>
         <button class="btn" id="refresh" type="button"></button>
-        <a class="btn primary" id="grafana" href="#" target="_blank" rel="noopener"></a>
         <button class="btn danger" id="logout" type="button"></button>
       </div>
     </header>
@@ -1789,7 +1045,7 @@ __MONITORING_EOF__
   // ---------------------------------------------------------------- i18n
   const T = {
     en: {
-      title: "Server Monitor", monitors: "Monitors", refresh: "Refresh", grafana: "Grafana", logout: "Logout",
+      title: "Server Monitor", monitors: "Monitors", refresh: "Refresh", logout: "Logout",
       lang_switch: "فارسی", host: "Host",
       cpu: "CPU", memory: "Memory", disk: "Disk", uptime: "Uptime", load: "Load average",
       net_down: "Network in", net_up: "Network out", containers: "Containers", targets: "Targets up",
@@ -1819,7 +1075,7 @@ __MONITORING_EOF__
       t_dark: "Switch to light theme", t_light: "Switch to dark theme",
     },
     fa: {
-      title: "مانیتورینگ سرور", monitors: "مانیتورها", refresh: "بروزرسانی", grafana: "گرافانا", logout: "خروج",
+      title: "مانیتورینگ سرور", monitors: "مانیتورها", refresh: "بروزرسانی", logout: "خروج",
       lang_switch: "English", host: "سرور",
       cpu: "پردازنده", memory: "حافظه (رم)", disk: "دیسک", uptime: "مدت روشن بودن", load: "میانگین بار",
       net_down: "دریافت شبکه", net_up: "ارسال شبکه", containers: "کانتینرها", targets: "تارگت‌های فعال",
@@ -1863,7 +1119,6 @@ __MONITORING_EOF__
     instances: [],
     view: "overview",
     overview: null,
-    grafanaPort: 3001,
     renderId: 0,
   };
   const t = (k) => T[state.lang][k] ?? k;
@@ -1958,8 +1213,6 @@ __MONITORING_EOF__
     $("theme").title = $("theme").getAttribute("aria-label");
     $("lang").innerHTML = `${icon("globe")}<span class="txt">${esc(t("lang_switch"))}</span>`;
     $("refresh").innerHTML = `${icon("refresh")}<span class="txt">${esc(t("refresh"))}</span>`;
-    $("grafana").innerHTML = `${icon("chart")}<span class="txt">${esc(t("grafana"))}</span>`;
-    $("grafana").href = `${location.protocol}//${location.hostname}:${state.grafanaPort}/d/server-overview`;
     $("logout").innerHTML = `${icon("logout")}<span class="txt">${esc(t("logout"))}</span>`;
     renderNav();
   }
@@ -2268,7 +1521,6 @@ __MONITORING_EOF__
   window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (state.view === "overview") renderView(false); }, 300); });
 
   applyLocale();
-  api("/api/config").then((c) => { state.grafanaPort = c.grafana_port; applyLocale(); }).catch(() => { /* keep default */ });
   state.view = VIEWS.some((v) => v.id === location.hash.slice(1)) ? location.hash.slice(1) : "overview";
   renderNav();
   tick(true);
@@ -2600,10 +1852,29 @@ choose_port() {
   else echo "$var='$p'" >> "$INSTALL_DIR/.env"; fi
 }
 
-# Older installs used 8080 for the panel and 3000 for Grafana; the panel now owns 3000.
-migrate_ports() {
-  grep -q '^GRAFANA_PORT=' "$INSTALL_DIR/.env" && return 0
-  if grep -q "^PANEL_PORT='8080'" "$INSTALL_DIR/.env"; then sed -i "s/^PANEL_PORT=.*/PANEL_PORT='3000'/" "$INSTALL_DIR/.env"; fi
+# Older installs kept the login under GRAFANA_* names and also ran Grafana, which is gone now.
+# Copy the values to the PANEL_* names, move an old default panel port, drop the stale keys.
+migrate_env() {
+  local env="$INSTALL_DIR/.env"
+  set -a; . "$env"; set +a
+  add_key() { grep -q "^$1=" "$env" || echo "$1='$2'" >> "$env"; }
+  if ! grep -q '^PANEL_PASSWORD=' "$env"; then
+    [ -n "${GRAFANA_ADMIN_PASSWORD:-}" ] || die "No password found in $env - set PANEL_PASSWORD there and re-run."
+    add_key PANEL_PASSWORD "$GRAFANA_ADMIN_PASSWORD"
+  fi
+  add_key PANEL_USER "${GRAFANA_ADMIN_USER:-admin}"
+  add_key PANEL_BIND "${GRAFANA_BIND:-0.0.0.0}"
+  if grep -q "^PANEL_PORT='8080'" "$env"; then sed -i "s/^PANEL_PORT=.*/PANEL_PORT='3000'/" "$env"; fi
+  sed -i '/^GRAFANA_/d' "$env"
+}
+
+# Grafana was removed from the stack: drop its old container so its port is released.
+remove_legacy_grafana() {
+  local ids
+  ids=$(docker ps -aq --filter "label=com.docker.compose.project=server-monitoring" --filter "label=com.docker.compose.service=grafana" 2>/dev/null || true)
+  [ -z "$ids" ] && return 0
+  log "Removing the old Grafana container (the panel replaces it)"
+  docker rm -f $ids >/dev/null
 }
 
 # ---------------------------------------------------------------- main
@@ -2611,13 +1882,17 @@ FRESH=1; [ -f "$INSTALL_DIR/.env" ] && FRESH=0
 
 if [ "$FRESH" = 1 ]; then
   log "New installation in $INSTALL_DIR"
-  ask GRAFANA_ADMIN_USER "Grafana admin username" admin
-  ask GRAFANA_ADMIN_PASSWORD "Grafana admin password (empty = generate random)" ""
-  if [ -z "$GRAFANA_ADMIN_PASSWORD" ]; then
-    GRAFANA_ADMIN_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
+  # Older docs used GRAFANA_* names for these; accept them as fallbacks.
+  PANEL_USER=${PANEL_USER:-${GRAFANA_ADMIN_USER:-}}
+  PANEL_PASSWORD=${PANEL_PASSWORD:-${GRAFANA_ADMIN_PASSWORD:-}}
+  PANEL_BIND=${PANEL_BIND:-${GRAFANA_BIND:-}}
+  ask PANEL_USER "Panel username" admin
+  ask PANEL_PASSWORD "Panel password (empty = generate random)" ""
+  if [ -z "$PANEL_PASSWORD" ]; then
+    PANEL_PASSWORD=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
     GENERATED_PW=1
   fi
-  ask GRAFANA_BIND "Panel and Grafana listen address (0.0.0.0 = reachable from any network, 127.0.0.1 = local only)" 0.0.0.0
+  ask PANEL_BIND "Panel listen address (0.0.0.0 = reachable from any network, 127.0.0.1 = local only)" 0.0.0.0
   ask TELEGRAM_BOT_TOKEN "Telegram bot token for alerts (empty = skip)" ""
   TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
   [ -n "$TELEGRAM_BOT_TOKEN" ] && ask TELEGRAM_CHAT_ID "Telegram chat id" ""
@@ -2632,18 +1907,16 @@ extract_files
 if [ "$FRESH" = 1 ]; then
   # Values are single-quoted: .env is read by both bash and Docker Compose, and single quotes
   # keep characters like $ and spaces literal in both.
-  for v in GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD GRAFANA_BIND PANEL_PORT GRAFANA_PORT TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID SITES; do
+  for v in PANEL_USER PANEL_PASSWORD PANEL_BIND PANEL_PORT TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID SITES; do
     case "${!v:-}" in *\'*|*$'\n'*) die "$v must not contain single quotes or newlines." ;; esac
   done
-  [[ ${PANEL_PORT:-3000} =~ ^[0-9]{2,5}$ && ${GRAFANA_PORT:-3001} =~ ^[0-9]{2,5}$ ]] || die "PANEL_PORT and GRAFANA_PORT must be numbers."
+  [[ ${PANEL_PORT:-3000} =~ ^[0-9]{2,5}$ ]] || die "PANEL_PORT must be a number."
   umask 077
   cat > "$INSTALL_DIR/.env" <<ENV
-GRAFANA_ADMIN_USER='$GRAFANA_ADMIN_USER'
-GRAFANA_ADMIN_PASSWORD='$GRAFANA_ADMIN_PASSWORD'
-GRAFANA_BIND='$GRAFANA_BIND'
-PANEL_BIND='$GRAFANA_BIND'
+PANEL_USER='$PANEL_USER'
+PANEL_PASSWORD='$PANEL_PASSWORD'
+PANEL_BIND='$PANEL_BIND'
 PANEL_PORT='${PANEL_PORT:-3000}'
-GRAFANA_PORT='${GRAFANA_PORT:-3001}'
 PROMETHEUS_RETENTION='${PROMETHEUS_RETENTION:-30d}'
 TELEGRAM_BOT_TOKEN='${TELEGRAM_BOT_TOKEN:-}'
 TELEGRAM_CHAT_ID='${TELEGRAM_CHAT_ID:-}'
@@ -2661,11 +1934,10 @@ ENV
   fi
 fi
 
+if [ "$FRESH" = 0 ]; then migrate_env; fi
 "$INSTALL_DIR/scripts/render-config.sh"
-migrate_ports
 
 if [ "$NO_START" = 1 ]; then
-  choose_port GRAFANA_PORT grafana 3000 3001
   choose_port PANEL_PORT panel 8080 3000
   log "Files written to $INSTALL_DIR (--no-start given, containers not started)."
   exit 0
@@ -2674,9 +1946,7 @@ fi
 ensure_docker
 log "Pulling images and starting the stack"
 compose pull --quiet < /dev/null
-# Start Grafana first so that, on upgrades, it releases port 3000 before the panel claims it.
-choose_port GRAFANA_PORT grafana 3000 3001
-compose up -d --no-deps grafana < /dev/null
+remove_legacy_grafana
 choose_port PANEL_PORT panel 8080 3000
 compose up -d --remove-orphans < /dev/null
 # Config files are bind-mounted, so running containers need a nudge to re-read them.
@@ -2685,30 +1955,29 @@ compose kill -s SIGHUP prometheus alertmanager < /dev/null >/dev/null 2>&1 || tr
 compose restart panel < /dev/null >/dev/null 2>&1 || true
 
 set -a; . "$INSTALL_DIR/.env"; set +a
-log "Waiting for Grafana to become healthy"
+log "Waiting for the panel to become healthy"
 healthy=0
 for _ in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:${GRAFANA_PORT:-3001}/api/health" >/dev/null 2>&1; then healthy=1; break; fi
+  if curl -fsS "http://127.0.0.1:${PANEL_PORT:-3000}/healthz" >/dev/null 2>&1; then healthy=1; break; fi
   sleep 2
 done
-[ "$healthy" = 1 ] || warn "Grafana did not respond in 2 minutes. Check: docker compose --project-directory $INSTALL_DIR logs grafana"
+[ "$healthy" = 1 ] || warn "The panel did not respond in 2 minutes. Check: docker compose --project-directory $INSTALL_DIR logs panel"
 
-set -a; . "$INSTALL_DIR/.env"; set +a
 ip=$(hostname -I 2>/dev/null | awk '{print $1}'); ip=${ip:-<server-ip>}
 echo
 log "Done."
-PANEL_PORT=${PANEL_PORT:-3000}; GRAFANA_PORT=${GRAFANA_PORT:-3001}
-if [ "$GRAFANA_BIND" = 127.0.0.1 ]; then
-  echo "  Services are local-only. From your computer run:"
-  echo "    ssh -L $PANEL_PORT:127.0.0.1:$PANEL_PORT -L $GRAFANA_PORT:127.0.0.1:$GRAFANA_PORT root@$ip"
-  echo "  then open http://localhost:$PANEL_PORT (panel) and http://localhost:$GRAFANA_PORT (Grafana)"
+PANEL_PORT=${PANEL_PORT:-3000}
+if [ "${PANEL_BIND:-0.0.0.0}" = 127.0.0.1 ]; then
+  echo "  The panel is local-only. From your computer run:  ssh -L $PANEL_PORT:127.0.0.1:$PANEL_PORT root@$ip"
+  echo "  then open http://localhost:$PANEL_PORT"
 else
-  echo "  Panel:    http://$ip:$PANEL_PORT"
-  echo "  Grafana:  http://$ip:$GRAFANA_PORT"
-  echo "  (open TCP ports $PANEL_PORT and $GRAFANA_PORT in your firewall; put HTTPS in front for production)"
+  echo "  Panel:    http://$ip:$PANEL_PORT   (open TCP port $PANEL_PORT in your firewall; put HTTPS in front for production)"
 fi
-echo "  Login:    $GRAFANA_ADMIN_USER / ${GENERATED_PW:+$GRAFANA_ADMIN_PASSWORD}${GENERATED_PW:-(the password you chose)}   (same for panel and Grafana)"
+echo "  Login:    $PANEL_USER / ${GENERATED_PW:+$PANEL_PASSWORD}${GENERATED_PW:-(the password you chose)}"
 [ -n "${GENERATED_PW:-}" ] && echo "  (saved in $INSTALL_DIR/.env)"
+if docker volume inspect server-monitoring_grafana_data >/dev/null 2>&1; then
+  echo "  Old Grafana data is still on disk; remove it with: docker volume rm server-monitoring_grafana_data"
+fi
 echo "  Websites: edit $INSTALL_DIR/prometheus/targets/http.yml (no restart needed)"
 echo "  Manage:   docker compose --project-directory $INSTALL_DIR ps | logs | restart"
 [ -z "${TELEGRAM_BOT_TOKEN:-}" ] && echo "  Alerts:   Telegram not configured - fill TELEGRAM_* in $INSTALL_DIR/.env, then run $INSTALL_DIR/scripts/render-config.sh && docker compose --project-directory $INSTALL_DIR restart alertmanager"

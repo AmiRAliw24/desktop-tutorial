@@ -37,9 +37,38 @@ services:
     pid: host
     command:
       - --path.rootfs=/host
+      # Network stats come from node-net below: inside a container this collector would only
+      # see the container's own virtual interface, not the server's real network cards.
+      - --no-collector.netdev
+      - --no-collector.netclass
       - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
     volumes:
       - /:/host:ro,rslave
+    networks: [monitoring]
+
+  # Reads the HOST's network namespace (via PID 1) so real NIC traffic is measured correctly.
+  # Needs privileged: reading another namespace's /proc/1/net is blocked by the default
+  # AppArmor/ptrace restrictions.
+  node-net:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    pid: host
+    privileged: true
+    user: root
+    command:
+      - --path.procfs=/host/proc/1
+      - --path.sysfs=/host/sys
+      - --collector.disable-defaults
+      - --collector.netdev
+      # netlink would ask the kernel about the exporter's OWN namespace and ignore --path.procfs
+      - --no-collector.netdev.netlink
+      - --collector.netclass
+      - --no-collector.netclass.netlink
+      - --collector.netdev.device-exclude=^(lo|veth.*|docker.*|br-.*|virbr.*|cni.*|cali.*|flannel.*|ifb.*)$$
+      - --collector.netclass.ignored-devices=^(lo|veth.*|docker.*|br-.*|virbr.*|cni.*|cali.*|flannel.*|ifb.*)$$
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
     networks: [monitoring]
 
   cadvisor:

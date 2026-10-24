@@ -15,12 +15,20 @@ scrape_configs:
     static_configs:
       - targets: [localhost:9090]
 
+  # Servers to monitor. Targets live in prometheus/targets/nodes.yml (reloaded automatically).
+  # Each remote server runs its own node_exporter (with all default collectors, incl. network).
   - job_name: node
+    file_sd_configs:
+      - files: [/etc/prometheus/targets/nodes.yml]
+
+  # Real network-card stats of THIS server (see node-net in docker-compose.yml). Reported under
+  # the same instance name as the main exporter so the panel shows them as one server.
+  - job_name: node-net
     static_configs:
-      - targets: [node-exporter:9100]
-        labels:
-          instance_name: this-server
-    # Add more servers by running node_exporter on them and listing them here.
+      - targets: [node-net:9100]
+    relabel_configs:
+      - target_label: instance
+        replacement: node-exporter:9100
 
   - job_name: cadvisor
     static_configs:

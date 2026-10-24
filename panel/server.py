@@ -102,7 +102,7 @@ def by_label(expr, label):
 
 
 INSTANCE_RE = re.compile(r"^[A-Za-z0-9_.:\-\[\]]{1,128}$")
-VIRTUAL_NICS = 'device!~"lo|veth.*|docker.*|br-.*|cali.*|flannel.*"'
+VIRTUAL_NICS = 'device!~"lo|veth.*|docker.*|br-.*|virbr.*|cni.*|cali.*|flannel.*|ifb.*"'
 REAL_FS = 'fstype!~"tmpfs|overlay|squashfs|devtmpfs|ramfs|fuse.*|nsfs|proc|sysfs|cgroup.*"'
 
 
@@ -110,13 +110,15 @@ def node_instances():
     return sorted({m.get("instance", "") for m, _ in vector('up{job="node"}')} - {""})
 
 
-def node_selector(instance):
+def node_selector(instance, net=False):
+    """Label selector for one server. net=True also matches the node-net job (real NIC stats)."""
     if not instance:
         found = node_instances()
         instance = found[0] if found else ""
     if instance and not INSTANCE_RE.match(instance):
         raise ValueError("bad instance")
-    return f'job="node",instance="{instance}"' if instance else 'job="node"'
+    job = 'job=~"node|node-net"' if net else 'job="node"'
+    return f'{job},instance="{instance}"' if instance else job
 
 # ------------------------------------------------------------------ api handlers
 
@@ -130,6 +132,7 @@ def api_instances(_q):
 
 def api_overview(q):
     n = node_selector(q.get("instance"))
+    nn = node_selector(q.get("instance"), net=True)
     info = (vector(f"node_uname_info{{{n}}}") or [({}, None)])[0][0]
     osinfo = (vector(f"node_os_info{{{n}}}") or [({}, None)])[0][0]
     cpuinfo = (vector(f"node_cpu_info{{{n}}}") or [({}, None)])[0][0]
@@ -156,8 +159,8 @@ def api_overview(q):
         "uptime": scalar(f"time() - node_boot_time_seconds{{{n}}}"),
         "load": [scalar(f"node_load{p}{{{n}}}") for p in (1, 5, 15)],
         "net": {
-            "rx": scalar(f"sum(rate(node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}[2m]))"),
-            "tx": scalar(f"sum(rate(node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}[2m]))"),
+            "rx": scalar(f"sum(rate(node_network_receive_bytes_total{{{nn},{VIRTUAL_NICS}}}[2m]))"),
+            "tx": scalar(f"sum(rate(node_network_transmit_bytes_total{{{nn},{VIRTUAL_NICS}}}[2m]))"),
         },
         "containers": scalar('count(count by (name) (container_memory_working_set_bytes{name!=""}))') or 0,
         "targets": {"up": scalar("sum(up)") or 0, "total": scalar("count(up)") or 0},
@@ -193,14 +196,16 @@ def api_disks(q):
 
 
 def api_network(q):
-    n = node_selector(q.get("instance"))
+    n = node_selector(q.get("instance"), net=True)
     rx = by_label(f"rate(node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}[2m])", "device")
     tx = by_label(f"rate(node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}[2m])", "device")
     rx_total = by_label(f"node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}", "device")
     tx_total = by_label(f"node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}", "device")
-    up = by_label(f'node_network_up{{{n},{VIRTUAL_NICS}}}', "device")
+    up = by_label(f"node_network_up{{{n},{VIRTUAL_NICS}}}", "device")
+    speed = by_label(f"node_network_speed_bytes{{{n},{VIRTUAL_NICS}}}", "device")
     return {"rows": [{"device": d, "up": up.get(d) == 1, "rx": rx.get(d), "tx": tx.get(d),
-                      "rx_total": rx_total.get(d), "tx_total": tx_total.get(d)} for d in sorted(rx)]}
+                      "rx_total": rx_total.get(d), "tx_total": tx_total.get(d),
+                      "speed": speed.get(d) if (speed.get(d) or 0) > 0 else None} for d in sorted(rx)]}
 
 
 def api_containers(_q):
@@ -252,13 +257,14 @@ RANGES = {"1h": 3600, "6h": 6 * 3600, "24h": 24 * 3600, "7d": 7 * 24 * 3600}
 
 def api_history(q):
     n = node_selector(q.get("instance"))
+    nn = node_selector(q.get("instance"), net=True)
     span = RANGES.get(q.get("range", "1h"), 3600)
     queries = {
         "cpu": [("CPU", f'100 - avg(rate(node_cpu_seconds_total{{{n},mode="idle"}}[2m])) * 100')],
         "mem": [("Memory", f"(1 - node_memory_MemAvailable_bytes{{{n}}} / node_memory_MemTotal_bytes{{{n}}}) * 100")],
         "load": [(f"{p}m", f"node_load{p}{{{n}}}") for p in (1, 5, 15)],
-        "net": [("rx", f"sum(rate(node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}[2m]))"),
-                ("tx", f"sum(rate(node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}[2m]))")],
+        "net": [("rx", f"sum(rate(node_network_receive_bytes_total{{{nn},{VIRTUAL_NICS}}}[2m]))"),
+                ("tx", f"sum(rate(node_network_transmit_bytes_total{{{nn},{VIRTUAL_NICS}}}[2m]))")],
     }.get(q.get("metric", ""))
     if not queries:
         raise ValueError("unknown metric")

@@ -86,9 +86,18 @@ docker compose up -d
 ## تنظیمات
 
 - **سایت‌ها و پورت‌ها:** فایل `prometheus/targets/http.yml` (سایت‌ها) و `prometheus/targets/tcp.yml` (پورت‌ها) را ویرایش کنید؛ بعد از ذخیره خودکار اعمال می‌شود و ری‌استارت لازم نیست.
-- **سرور اضافه:** `node_exporter` را روی سرور دیگر نصب کنید و `IP:9100` را به job به نام `node` در `prometheus/prometheus.yml` اضافه کنید (ایمن‌تر: پورت 9100 را فقط برای IP سرور مانیتورینگ در فایروال باز کنید).
+- **سرور اضافه:** `node_exporter` را روی سرور دیگر نصب کنید، پورت 9100 را فقط برای IP سرور مانیتورینگ در فایروال باز کنید و آدرس `IP:9100` را در `prometheus/targets/nodes.yml` بنویسید (بعد از ذخیره خودکار اعمال می‌شود و با اجرای دوباره‌ی `install.sh` پاک نمی‌شود).
 - **هشدارها:** `prometheus/rules/alerts.yml` شامل ۱۲ قانون است: خاموشی هدف، CPU/رم/دیسک بالا، پر شدن دیسک تا ۲۴ ساعت آینده، load، ری‌استارت سرور، مصرف کانتینر، قطعی سایت، کندی پاسخ و انقضای SSL (کمتر از ۱۴ روز).
 - **ایمیل یا Slack:** در `alertmanager/alertmanager.yml.tmpl` یک receiver جدید اضافه کنید.
+
+## آمار شبکه
+
+`node_exporter` داخل کانتینر فقط شبکه‌ی خود کانتینر را می‌بیند، نه کارت‌های واقعی سرور. به همین دلیل سرویس جدا `node-net` (همان `node_exporter` با `privileged` و خواندن از `/proc/1`، یعنی namespace شبکه‌ی خود سرور) آمار واقعی کارت‌ها (مثل `eth0`) را می‌دهد و `node_exporter` اصلی آمار شبکه را نمی‌دهد تا دوبار شمرده نشود. اگر جدول Network خالی بود، این را بزنید:
+
+```bash
+docker compose logs --tail 20 node-net
+curl -s http://$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' server-monitoring-node-net-1):9100/metrics | grep '^node_network_receive_bytes_total'
+```
 
 ## تست هشدار
 

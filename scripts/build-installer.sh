@@ -27,7 +27,7 @@ FILES=(
   panel/static/favicon.svg:644
 )
 # Targets are only written on first install so user edits survive re-runs.
-FIRST_ONLY=(prometheus/targets/http.yml:644 prometheus/targets/tcp.yml:644)
+FIRST_ONLY=(prometheus/targets/http.yml:644 prometheus/targets/tcp.yml:644 prometheus/targets/nodes.yml:644)
 
 # cat that guarantees a trailing newline, so the heredoc delimiter always starts its own line.
 cat_nl() { cat "$1"; [ -z "$(tail -c1 "$1")" ] || echo; }

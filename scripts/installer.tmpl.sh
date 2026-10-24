@@ -197,6 +197,8 @@ choose_port GRAFANA_PORT grafana 3000 3001
 compose up -d --no-deps grafana < /dev/null
 choose_port PANEL_PORT panel 8080 3000
 compose up -d --remove-orphans < /dev/null
+# Config files are bind-mounted, so running containers need a nudge to re-read them.
+compose kill -s SIGHUP prometheus alertmanager < /dev/null >/dev/null 2>&1 || true
 
 set -a; . "$INSTALL_DIR/.env"; set +a
 log "Waiting for Grafana to become healthy"

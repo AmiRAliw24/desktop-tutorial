@@ -115,9 +115,38 @@ services:
     pid: host
     command:
       - --path.rootfs=/host
+      # Network stats come from node-net below: inside a container this collector would only
+      # see the container's own virtual interface, not the server's real network cards.
+      - --no-collector.netdev
+      - --no-collector.netclass
       - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
     volumes:
       - /:/host:ro,rslave
+    networks: [monitoring]
+
+  # Reads the HOST's network namespace (via PID 1) so real NIC traffic is measured correctly.
+  # Needs privileged: reading another namespace's /proc/1/net is blocked by the default
+  # AppArmor/ptrace restrictions.
+  node-net:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    pid: host
+    privileged: true
+    user: root
+    command:
+      - --path.procfs=/host/proc/1
+      - --path.sysfs=/host/sys
+      - --collector.disable-defaults
+      - --collector.netdev
+      # netlink would ask the kernel about the exporter's OWN namespace and ignore --path.procfs
+      - --no-collector.netdev.netlink
+      - --collector.netclass
+      - --no-collector.netclass.netlink
+      - --collector.netdev.device-exclude=^(lo|veth.*|docker.*|br-.*|virbr.*|cni.*|cali.*|flannel.*|ifb.*)$$
+      - --collector.netclass.ignored-devices=^(lo|veth.*|docker.*|br-.*|virbr.*|cni.*|cali.*|flannel.*|ifb.*)$$
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
     networks: [monitoring]
 
   cadvisor:
@@ -305,9 +334,18 @@ docker compose up -d
 ## تنظیمات
 
 - **سایت‌ها و پورت‌ها:** فایل `prometheus/targets/http.yml` (سایت‌ها) و `prometheus/targets/tcp.yml` (پورت‌ها) را ویرایش کنید؛ بعد از ذخیره خودکار اعمال می‌شود و ری‌استارت لازم نیست.
-- **سرور اضافه:** `node_exporter` را روی سرور دیگر نصب کنید و `IP:9100` را به job به نام `node` در `prometheus/prometheus.yml` اضافه کنید (ایمن‌تر: پورت 9100 را فقط برای IP سرور مانیتورینگ در فایروال باز کنید).
+- **سرور اضافه:** `node_exporter` را روی سرور دیگر نصب کنید، پورت 9100 را فقط برای IP سرور مانیتورینگ در فایروال باز کنید و آدرس `IP:9100` را در `prometheus/targets/nodes.yml` بنویسید (بعد از ذخیره خودکار اعمال می‌شود و با اجرای دوباره‌ی `install.sh` پاک نمی‌شود).
 - **هشدارها:** `prometheus/rules/alerts.yml` شامل ۱۲ قانون است: خاموشی هدف، CPU/رم/دیسک بالا، پر شدن دیسک تا ۲۴ ساعت آینده، load، ری‌استارت سرور، مصرف کانتینر، قطعی سایت، کندی پاسخ و انقضای SSL (کمتر از ۱۴ روز).
 - **ایمیل یا Slack:** در `alertmanager/alertmanager.yml.tmpl` یک receiver جدید اضافه کنید.
+
+## آمار شبکه
+
+`node_exporter` داخل کانتینر فقط شبکه‌ی خود کانتینر را می‌بیند، نه کارت‌های واقعی سرور. به همین دلیل سرویس جدا `node-net` (همان `node_exporter` با `privileged` و خواندن از `/proc/1`، یعنی namespace شبکه‌ی خود سرور) آمار واقعی کارت‌ها (مثل `eth0`) را می‌دهد و `node_exporter` اصلی آمار شبکه را نمی‌دهد تا دوبار شمرده نشود. اگر جدول Network خالی بود، این را بزنید:
+
+```bash
+docker compose logs --tail 20 node-net
+curl -s http://$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' server-monitoring-node-net-1):9100/metrics | grep '^node_network_receive_bytes_total'
+```
 
 ## تست هشدار
 
@@ -334,12 +372,20 @@ scrape_configs:
     static_configs:
       - targets: [localhost:9090]
 
+  # Servers to monitor. Targets live in prometheus/targets/nodes.yml (reloaded automatically).
+  # Each remote server runs its own node_exporter (with all default collectors, incl. network).
   - job_name: node
+    file_sd_configs:
+      - files: [/etc/prometheus/targets/nodes.yml]
+
+  # Real network-card stats of THIS server (see node-net in docker-compose.yml). Reported under
+  # the same instance name as the main exporter so the panel shows them as one server.
+  - job_name: node-net
     static_configs:
-      - targets: [node-exporter:9100]
-        labels:
-          instance_name: this-server
-    # Add more servers by running node_exporter on them and listing them here.
+      - targets: [node-net:9100]
+    relabel_configs:
+      - target_label: instance
+        replacement: node-exporter:9100
 
   - job_name: cadvisor
     static_configs:
@@ -1368,7 +1414,7 @@ def by_label(expr, label):
 
 
 INSTANCE_RE = re.compile(r"^[A-Za-z0-9_.:\-\[\]]{1,128}$")
-VIRTUAL_NICS = 'device!~"lo|veth.*|docker.*|br-.*|cali.*|flannel.*"'
+VIRTUAL_NICS = 'device!~"lo|veth.*|docker.*|br-.*|virbr.*|cni.*|cali.*|flannel.*|ifb.*"'
 REAL_FS = 'fstype!~"tmpfs|overlay|squashfs|devtmpfs|ramfs|fuse.*|nsfs|proc|sysfs|cgroup.*"'
 
 
@@ -1376,13 +1422,15 @@ def node_instances():
     return sorted({m.get("instance", "") for m, _ in vector('up{job="node"}')} - {""})
 
 
-def node_selector(instance):
+def node_selector(instance, net=False):
+    """Label selector for one server. net=True also matches the node-net job (real NIC stats)."""
     if not instance:
         found = node_instances()
         instance = found[0] if found else ""
     if instance and not INSTANCE_RE.match(instance):
         raise ValueError("bad instance")
-    return f'job="node",instance="{instance}"' if instance else 'job="node"'
+    job = 'job=~"node|node-net"' if net else 'job="node"'
+    return f'{job},instance="{instance}"' if instance else job
 
 # ------------------------------------------------------------------ api handlers
 
@@ -1396,6 +1444,7 @@ def api_instances(_q):
 
 def api_overview(q):
     n = node_selector(q.get("instance"))
+    nn = node_selector(q.get("instance"), net=True)
     info = (vector(f"node_uname_info{{{n}}}") or [({}, None)])[0][0]
     osinfo = (vector(f"node_os_info{{{n}}}") or [({}, None)])[0][0]
     cpuinfo = (vector(f"node_cpu_info{{{n}}}") or [({}, None)])[0][0]
@@ -1422,8 +1471,8 @@ def api_overview(q):
         "uptime": scalar(f"time() - node_boot_time_seconds{{{n}}}"),
         "load": [scalar(f"node_load{p}{{{n}}}") for p in (1, 5, 15)],
         "net": {
-            "rx": scalar(f"sum(rate(node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}[2m]))"),
-            "tx": scalar(f"sum(rate(node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}[2m]))"),
+            "rx": scalar(f"sum(rate(node_network_receive_bytes_total{{{nn},{VIRTUAL_NICS}}}[2m]))"),
+            "tx": scalar(f"sum(rate(node_network_transmit_bytes_total{{{nn},{VIRTUAL_NICS}}}[2m]))"),
         },
         "containers": scalar('count(count by (name) (container_memory_working_set_bytes{name!=""}))') or 0,
         "targets": {"up": scalar("sum(up)") or 0, "total": scalar("count(up)") or 0},
@@ -1459,14 +1508,16 @@ def api_disks(q):
 
 
 def api_network(q):
-    n = node_selector(q.get("instance"))
+    n = node_selector(q.get("instance"), net=True)
     rx = by_label(f"rate(node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}[2m])", "device")
     tx = by_label(f"rate(node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}[2m])", "device")
     rx_total = by_label(f"node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}", "device")
     tx_total = by_label(f"node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}", "device")
-    up = by_label(f'node_network_up{{{n},{VIRTUAL_NICS}}}', "device")
+    up = by_label(f"node_network_up{{{n},{VIRTUAL_NICS}}}", "device")
+    speed = by_label(f"node_network_speed_bytes{{{n},{VIRTUAL_NICS}}}", "device")
     return {"rows": [{"device": d, "up": up.get(d) == 1, "rx": rx.get(d), "tx": tx.get(d),
-                      "rx_total": rx_total.get(d), "tx_total": tx_total.get(d)} for d in sorted(rx)]}
+                      "rx_total": rx_total.get(d), "tx_total": tx_total.get(d),
+                      "speed": speed.get(d) if (speed.get(d) or 0) > 0 else None} for d in sorted(rx)]}
 
 
 def api_containers(_q):
@@ -1518,13 +1569,14 @@ RANGES = {"1h": 3600, "6h": 6 * 3600, "24h": 24 * 3600, "7d": 7 * 24 * 3600}
 
 def api_history(q):
     n = node_selector(q.get("instance"))
+    nn = node_selector(q.get("instance"), net=True)
     span = RANGES.get(q.get("range", "1h"), 3600)
     queries = {
         "cpu": [("CPU", f'100 - avg(rate(node_cpu_seconds_total{{{n},mode="idle"}}[2m])) * 100')],
         "mem": [("Memory", f"(1 - node_memory_MemAvailable_bytes{{{n}}} / node_memory_MemTotal_bytes{{{n}}}) * 100")],
         "load": [(f"{p}m", f"node_load{p}{{{n}}}") for p in (1, 5, 15)],
-        "net": [("rx", f"sum(rate(node_network_receive_bytes_total{{{n},{VIRTUAL_NICS}}}[2m]))"),
-                ("tx", f"sum(rate(node_network_transmit_bytes_total{{{n},{VIRTUAL_NICS}}}[2m]))")],
+        "net": [("rx", f"sum(rate(node_network_receive_bytes_total{{{nn},{VIRTUAL_NICS}}}[2m]))"),
+                ("tx", f"sum(rate(node_network_transmit_bytes_total{{{nn},{VIRTUAL_NICS}}}[2m]))")],
     }.get(q.get("metric", ""))
     if not queries:
         raise ValueError("unknown metric")
@@ -1742,7 +1794,7 @@ __MONITORING_EOF__
       rx: "in", tx: "out", no_data: "No data yet", empty: "Nothing to show yet.",
       name: "Name", cpu_h: "CPU", mem_h: "Memory", uptime_h: "Uptime", status: "Status", target: "Target", type: "Type",
       response: "Response", http: "HTTP", ssl_h: "SSL days left", mount: "Mount", device: "Device", fs: "Filesystem",
-      usage: "Usage", used_total: "Used / Total", iface: "Interface", rate_in: "In", rate_out: "Out", total_in: "Total in", total_out: "Total out",
+      usage: "Usage", used_total: "Used / Total", iface: "Interface", speed: "Link speed", rate_in: "In", rate_out: "Out", total_in: "Total in", total_out: "Total out",
       job: "Job", instance: "Instance", scrape: "Scrape time", error: "Error", severity: "Severity", alert: "Alert", summary: "Summary", state: "State", since: "Since",
       s_running: "Running", s_up: "Up", s_down: "Down", s_firing: "Firing", s_pending: "Pending",
       no_alerts: "No active alerts. Everything looks healthy.", host_online: "Host online",
@@ -1769,7 +1821,7 @@ __MONITORING_EOF__
       rx: "دریافت", tx: "ارسال", no_data: "هنوز داده‌ای نیست", empty: "هنوز چیزی برای نمایش نیست.",
       name: "نام", cpu_h: "پردازنده", mem_h: "حافظه", uptime_h: "مدت اجرا", status: "وضعیت", target: "مقصد", type: "نوع",
       response: "پاسخ", http: "HTTP", ssl_h: "روز تا انقضای SSL", mount: "مسیر", device: "دستگاه", fs: "فایل‌سیستم",
-      usage: "مصرف", used_total: "مصرف / کل", iface: "کارت شبکه", rate_in: "دریافت", rate_out: "ارسال", total_in: "کل دریافت", total_out: "کل ارسال",
+      usage: "مصرف", used_total: "مصرف / کل", iface: "کارت شبکه", speed: "سرعت لینک", rate_in: "دریافت", rate_out: "ارسال", total_in: "کل دریافت", total_out: "کل ارسال",
       job: "گروه", instance: "نمونه", scrape: "زمان جمع‌آوری", error: "خطا", severity: "شدت", alert: "هشدار", summary: "خلاصه", state: "حالت", since: "از",
       s_running: "در حال اجرا", s_up: "فعال", s_down: "قطع", s_firing: "فعال", s_pending: "در انتظار",
       no_alerts: "هشدار فعالی وجود ندارد. همه چیز سالم است.", host_online: "سرور آنلاین است",
@@ -1985,6 +2037,7 @@ __MONITORING_EOF__
       return table([
         { h: "iface", cls: "strong", cell: (r) => num(esc(r.device)) },
         { h: "status", cell: (r) => (r.up ? pill("ok", t("s_up")) : pill("bad", t("s_down"))) },
+        { h: "speed", cell: (r) => num(r.speed ? `${nf((r.speed * 8) / 1e6, 0)} Mbit/s` : "–") },
         { h: "rate_in", cell: (r) => num(fmtRate(r.rx)) },
         { h: "rate_out", cell: (r) => num(fmtRate(r.tx)) },
         { h: "total_in", cell: (r) => num(fmtBytes(r.rx_total)) },
@@ -2465,6 +2518,19 @@ __MONITORING_EOF__
 []
 __MONITORING_EOF__
   fi
+  if [ ! -e "$INSTALL_DIR/prometheus/targets/nodes.yml" ]; then
+  write_file prometheus/targets/nodes.yml 644 <<'__MONITORING_EOF__'
+# Servers whose node_exporter Prometheus should scrape (host:9100). Picked up automatically on save.
+# node-exporter:9100 is this server. To add another one, install node_exporter there, open
+# port 9100 only for this server's IP, and add its address below.
+- targets:
+    - node-exporter:9100
+  labels:
+    instance_name: this-server
+# - targets:
+#     - 203.0.113.10:9100
+__MONITORING_EOF__
+  fi
 }
 
 # ---------------------------------------------------------------- docker
@@ -2586,6 +2652,8 @@ choose_port GRAFANA_PORT grafana 3000 3001
 compose up -d --no-deps grafana < /dev/null
 choose_port PANEL_PORT panel 8080 3000
 compose up -d --remove-orphans < /dev/null
+# Config files are bind-mounted, so running containers need a nudge to re-read them.
+compose kill -s SIGHUP prometheus alertmanager < /dev/null >/dev/null 2>&1 || true
 
 set -a; . "$INSTALL_DIR/.env"; set +a
 log "Waiting for Grafana to become healthy"

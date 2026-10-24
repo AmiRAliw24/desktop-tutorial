@@ -725,7 +725,6 @@ def api_overview(q):
         "mem": {"total": mem_total, "used": None if mem_total is None or mem_avail is None else mem_total - mem_avail},
         "swap": {"total": swap_total, "used": None if swap_total is None or swap_free is None else swap_total - swap_free},
         "disk": root,
-        "uptime": scalar(f"time() - node_boot_time_seconds{{{n}}}"),
         "load": [scalar(f"node_load{p}{{{n}}}") for p in (1, 5, 15)],
         "net": {
             "rx": scalar(f"sum(rate(node_network_receive_bytes_total{{{nn},{VIRTUAL_NICS}}}[2m]))"),
@@ -1047,7 +1046,7 @@ __MONITORING_EOF__
     en: {
       title: "Server Monitor", monitors: "Monitors", refresh: "Refresh", logout: "Logout",
       lang_switch: "فارسی", host: "Host",
-      cpu: "CPU", memory: "Memory", disk: "Disk", uptime: "Uptime", load: "Load average",
+      cpu: "CPU", memory: "Memory", disk: "Disk", load: "Load average",
       net_down: "Network in", net_up: "Network out", containers: "Containers", targets: "Targets up",
       websites: "Checks up", ssl: "SSL expires in", alerts: "Firing alerts", cores: "cores", of: "of", days: "days", running: "running",
       overview: "Overview", containers_nav: "Containers", websites_nav: "Websites", disks: "Disks", network: "Network",
@@ -1077,7 +1076,7 @@ __MONITORING_EOF__
     fa: {
       title: "مانیتورینگ سرور", monitors: "مانیتورها", refresh: "بروزرسانی", logout: "خروج",
       lang_switch: "English", host: "سرور",
-      cpu: "پردازنده", memory: "حافظه (رم)", disk: "دیسک", uptime: "مدت روشن بودن", load: "میانگین بار",
+      cpu: "پردازنده", memory: "حافظه (رم)", disk: "دیسک", load: "میانگین بار",
       net_down: "دریافت شبکه", net_up: "ارسال شبکه", containers: "کانتینرها", targets: "تارگت‌های فعال",
       websites: "چک‌های سالم", ssl: "انقضای SSL", alerts: "هشدارهای فعال", cores: "هسته", of: "از", days: "روز", running: "در حال اجرا",
       overview: "نمای کلی", containers_nav: "کانتینرها", websites_nav: "سایت‌ها", disks: "دیسک‌ها", network: "شبکه",
@@ -1249,7 +1248,6 @@ __MONITORING_EOF__
         sub: `${num(fmtBytes(o.mem.used))} ${esc(t("of"))} ${num(fmtBytes(o.mem.total))}` }),
       card({ big: true, label: t("disk"), ic: "disk", value: d ? num(`${nf(d.pct, 0)}%`) : "–", pct: d ? d.pct : null,
         sub: d ? `${num(esc(d.mount))} · ${num(fmtBytes(d.used))} ${esc(t("of"))} ${num(fmtBytes(d.total))}` : "" }),
-      card({ big: true, label: t("uptime"), ic: "clock", value: num(fmtDur(o.uptime)), sub: [o.host.name, o.host.os, o.host.kernel].filter(Boolean).map((x) => num(esc(x))).join("<br>") }),
       card({ label: t("load"), ic: "activity", tight: true, value: num(o.load.map((x) => nf(x, 2)).join(" / ")) }),
       card({ label: t("net_down"), ic: "down", value: num(fmtRate(o.net.rx)) }),
       card({ label: t("net_up"), ic: "up", value: num(fmtRate(o.net.tx)) }),
@@ -1363,7 +1361,8 @@ __MONITORING_EOF__
 
   function drawChart(box, cfg, series, uid) {
     const all = series.flatMap((s) => s.points.filter((p) => p[1] != null));
-    if (!all.length) { box.innerHTML = `<div class="empty">${esc(t("no_data"))}</div>`; return; }
+    // A line needs at least two samples at different times; right after startup there is only one.
+    if (new Set(all.map((p) => p[0])).size < 2) { box.innerHTML = `<div class="empty">${esc(t("no_data"))}</div>`; return; }
     const W = Math.max(260, Math.round(box.clientWidth) || 600), H = 190, L = 50, R = 8, TOP = 10, B = 24;
     const x0 = Math.min(...all.map((p) => p[0])), x1 = Math.max(...all.map((p) => p[0])) || x0 + 1;
     const ymax = cfg.max || niceMax(Math.max(...all.map((p) => p[1])) * 1.1);

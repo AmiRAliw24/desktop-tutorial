@@ -151,7 +151,6 @@ def api_overview(q):
         "mem": {"total": mem_total, "used": None if mem_total is None or mem_avail is None else mem_total - mem_avail},
         "swap": {"total": swap_total, "used": None if swap_total is None or swap_free is None else swap_total - swap_free},
         "disk": root,
-        "uptime": scalar(f"time() - node_boot_time_seconds{{{n}}}"),
         "load": [scalar(f"node_load{p}{{{n}}}") for p in (1, 5, 15)],
         "net": {
             "rx": scalar(f"sum(rate(node_network_receive_bytes_total{{{nn},{VIRTUAL_NICS}}}[2m]))"),

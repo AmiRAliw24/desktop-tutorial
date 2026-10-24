@@ -4,7 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Server Monitor</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2032%2032%22%3E%3Crect%20width=%2232%22%20height=%2232%22%20rx=%228%22%20fill=%22%230e1520%22/%3E%3Cpath%20d=%22M16%205l9%203.5v7c0%205.4-3.7%209.2-9%2011.5-5.3-2.3-9-6.1-9-11.5v-7L16%205z%22%20fill=%22none%22%20stroke=%22%232ee6a6%22%20stroke-width=%222%22%20stroke-linejoin=%22round%22/%3E%3Cpath%20d=%22M10.5%2016h3l2-3.5%202.5%207%202-3.5h1.5%22%20fill=%22none%22%20stroke=%22%232ee6a6%22%20stroke-width=%221.8%22%20stroke-linecap=%22round%22%20stroke-linejoin=%22round%22/%3E%3C/svg%3E" type="image/svg+xml">
+  <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="shortcut icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <meta name="theme-color" content="#0a0f16">
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
 </head>
@@ -33,10 +37,13 @@
       <aside class="card side">
         <h2 data-i18n="monitors">Monitors</h2>
         <nav class="nav" id="nav"></nav>
+        <h2 class="second" data-i18n="manage">Manage</h2>
+        <nav class="nav" id="nav-manage"></nav>
       </aside>
       <main class="card panel" id="panel"></main>
     </div>
     <div class="foot" id="foot"></div>
+    <div class="toasts" id="toasts" aria-live="polite"></div>
   </div>
 </body>
 </html>

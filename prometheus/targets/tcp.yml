@@ -1,4 +1,0 @@
-# TCP ports to monitor, as host:port. Picked up automatically on save.
-# - targets:
-#     - 127.0.0.1:22
-[]

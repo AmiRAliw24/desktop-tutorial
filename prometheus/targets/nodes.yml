@@ -1,9 +1,0 @@
-# Servers whose node_exporter Prometheus should scrape (host:9100). Picked up automatically on save.
-# node-exporter:9100 is this server. To add another one, install node_exporter there, open
-# port 9100 only for this server's IP, and add its address below.
-- targets:
-    - node-exporter:9100
-  labels:
-    instance_name: this-server
-# - targets:
-#     - 203.0.113.10:9100

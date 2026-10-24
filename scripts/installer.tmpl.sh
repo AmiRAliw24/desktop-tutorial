@@ -143,6 +143,12 @@ remove_legacy_grafana() {
   docker rm -f $ids >/dev/null
 }
 
+# set_env_key KEY VALUE - add or update a single-quoted value in .env
+set_env_key() {
+  if grep -q "^$1=" "$INSTALL_DIR/.env"; then sed -i "s|^$1=.*|$1='$2'|" "$INSTALL_DIR/.env"
+  else echo "$1='$2'" >> "$INSTALL_DIR/.env"; fi
+}
+
 # ---------------------------------------------------------------- main
 FRESH=1; [ -f "$INSTALL_DIR/.env" ] && FRESH=0
 
@@ -188,15 +194,21 @@ TELEGRAM_BOT_TOKEN='${TELEGRAM_BOT_TOKEN:-}'
 TELEGRAM_CHAT_ID='${TELEGRAM_CHAT_ID:-}'
 ENV
   umask 022
+  mkdir -p "$INSTALL_DIR/prometheus/targets"
   if [ -n "$SITES" ]; then
+    first=1
     {
-      echo "# Websites to monitor. Picked up automatically on save."
-      echo "- targets:"
+      printf '['
       IFS=',' read -ra urls <<< "$SITES"
-      for u in "${urls[@]}"; do u=${u//[[:space:]]/}; [ -n "$u" ] && echo "    - $u"; done
-    } > "$INSTALL_DIR/prometheus/targets/http.yml"
-  else
-    printf '%s\n' '# Websites to monitor. Picked up automatically on save.' '[]' > "$INSTALL_DIR/prometheus/targets/http.yml"
+      for u in "${urls[@]}"; do
+        u=${u//[[:space:]]/}; [ -n "$u" ] || continue
+        [[ $u =~ ^https?://[^[:space:]\"\'\`\<\>\\]+$ ]] || die "Not a valid website address: $u (use https://example.com)"
+        [ "$first" = 1 ] || printf ','
+        first=0
+        printf '{"targets": ["%s"], "labels": {}}' "$u"
+      done
+      printf ']\n'
+    } > "$INSTALL_DIR/prometheus/targets/http.json"
   fi
 fi
 
@@ -210,6 +222,9 @@ if [ "$NO_START" = 1 ]; then
 fi
 
 ensure_docker
+# The panel needs this group to use the Docker socket (container management).
+docker_gid=$(stat -c %g /var/run/docker.sock 2>/dev/null || true)
+[ -n "$docker_gid" ] && set_env_key DOCKER_GID "$docker_gid"
 log "Pulling images and starting the stack"
 compose pull --quiet < /dev/null
 remove_legacy_grafana
@@ -244,9 +259,8 @@ echo "  Login:    $PANEL_USER / ${GENERATED_PW:+$PANEL_PASSWORD}${GENERATED_PW:-
 if docker volume inspect server-monitoring_grafana_data >/dev/null 2>&1; then
   echo "  Old Grafana data is still on disk; remove it with: docker volume rm server-monitoring_grafana_data"
 fi
-echo "  Websites: edit $INSTALL_DIR/prometheus/targets/http.yml (no restart needed)"
+echo "  Everything else - websites, ports, servers, Telegram, alert rules, Docker containers - is managed inside the panel."
 echo "  Manage:   docker compose --project-directory $INSTALL_DIR ps | logs | restart"
-[ -z "${TELEGRAM_BOT_TOKEN:-}" ] && echo "  Alerts:   Telegram not configured - fill TELEGRAM_* in $INSTALL_DIR/.env, then run $INSTALL_DIR/scripts/render-config.sh && docker compose --project-directory $INSTALL_DIR restart alertmanager"
 exit 0
 }
 

@@ -1,0 +1,68 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /i1/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [alertmanager:9093]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
+
+  # Servers to monitor. Targets live in prometheus/targets/nodes.json, managed from the panel (reloaded automatically).
+  # Each remote server runs its own node_exporter (with all default collectors, incl. network).
+  - job_name: node
+    file_sd_configs:
+      - files: [/i1/prometheus/targets/nodes.json]
+        refresh_interval: 15s
+
+  # Real network-card stats of THIS server (see node-net in docker-compose.yml). Reported under
+  # the same instance name as the main exporter so the panel shows them as one server.
+  - job_name: node-net
+    static_configs:
+      - targets: [node-net:9100]
+    relabel_configs:
+      - target_label: instance
+        replacement: node-exporter:9100
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: [cadvisor:8080]
+
+  # Uptime / SSL checks. Targets live in prometheus/targets/http.json, managed from the panel.
+  - job_name: blackbox-http
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    file_sd_configs:
+      - files: [/i1/prometheus/targets/http.json]
+        refresh_interval: 15s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  # TCP port checks (e.g. SSH, database). Targets live in prometheus/targets/tcp.json, managed from the panel.
+  - job_name: blackbox-tcp
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    file_sd_configs:
+      - files: [/i1/prometheus/targets/tcp.json]
+        refresh_interval: 15s
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115

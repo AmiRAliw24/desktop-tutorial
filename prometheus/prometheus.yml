@@ -15,11 +15,12 @@ scrape_configs:
     static_configs:
       - targets: [localhost:9090]
 
-  # Servers to monitor. Targets live in prometheus/targets/nodes.yml (reloaded automatically).
+  # Servers to monitor. Targets live in prometheus/targets/nodes.json, managed from the panel (reloaded automatically).
   # Each remote server runs its own node_exporter (with all default collectors, incl. network).
   - job_name: node
     file_sd_configs:
-      - files: [/etc/prometheus/targets/nodes.yml]
+      - files: [/etc/prometheus/targets/nodes.json]
+        refresh_interval: 15s
 
   # Real network-card stats of THIS server (see node-net in docker-compose.yml). Reported under
   # the same instance name as the main exporter so the panel shows them as one server.
@@ -34,13 +35,14 @@ scrape_configs:
     static_configs:
       - targets: [cadvisor:8080]
 
-  # Uptime / SSL checks. Targets live in prometheus/targets/http.yml (reloaded automatically).
+  # Uptime / SSL checks. Targets live in prometheus/targets/http.json, managed from the panel.
   - job_name: blackbox-http
     metrics_path: /probe
     params:
       module: [http_2xx]
     file_sd_configs:
-      - files: [/etc/prometheus/targets/http.yml]
+      - files: [/etc/prometheus/targets/http.json]
+        refresh_interval: 15s
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target
@@ -49,13 +51,14 @@ scrape_configs:
       - target_label: __address__
         replacement: blackbox:9115
 
-  # TCP port checks (e.g. SSH, database). Targets live in prometheus/targets/tcp.yml.
+  # TCP port checks (e.g. SSH, database). Targets live in prometheus/targets/tcp.json, managed from the panel.
   - job_name: blackbox-tcp
     metrics_path: /probe
     params:
       module: [tcp_connect]
     file_sd_configs:
-      - files: [/etc/prometheus/targets/tcp.yml]
+      - files: [/etc/prometheus/targets/tcp.json]
+        refresh_interval: 15s
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

@@ -25,7 +25,8 @@ services:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
     volumes:
-      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # The whole directory is mounted (not one file) so the panel can replace alertmanager.yml.
+      - ./alertmanager:/etc/alertmanager:ro
       - alertmanager_data:/alertmanager
     ports:
       - "127.0.0.1:9093:9093"
@@ -97,17 +98,32 @@ services:
     restart: unless-stopped
     command: ["python", "-u", "/app/server.py"]
     user: "65534:65534"
+    # Group that owns /var/run/docker.sock (the installer sets DOCKER_GID); lets the panel manage containers.
+    group_add: ["${DOCKER_GID:-65534}"]
     read_only: true
+    tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       PROMETHEUS_URL: http://prometheus:9090
+      ALERTMANAGER_URL: http://alertmanager:9093
       PANEL_USER: ${PANEL_USER:-admin}
       PANEL_PASSWORD: ${PANEL_PASSWORD:?set PANEL_PASSWORD in .env}
       PANEL_LISTEN_PORT: "8080"
+      PANEL_DOCKER_CONTROL: ${PANEL_DOCKER_CONTROL:-1}
+      CONFIG_DIR: /config
+      DATA_DIR: /data
     volumes:
       - ./panel:/app:ro
+      # Writable so the panel can add sites/servers, edit alert rules and connect Telegram.
+      - ./prometheus/targets:/config/targets
+      - ./prometheus/rules:/config/rules
+      - ./alertmanager:/config/alertmanager
+      - ./data/panel:/data
+      # Docker control. Whoever can use this socket is root on the host: keep the panel password strong.
+      # To switch it off set PANEL_DOCKER_CONTROL=0 in .env (and/or DOCKER_SOCKET=/dev/null).
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
     ports:
       - "${PANEL_BIND:-0.0.0.0}:${PANEL_PORT:-3000}:8080"
     healthcheck:
@@ -115,7 +131,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-    depends_on: [prometheus]
+    depends_on: [prometheus, alertmanager]
     networks: [monitoring]
 
 volumes:

@@ -11,11 +11,14 @@ FILES=(
   .gitignore:644
   README.md:644
   prometheus/prometheus.yml:644
-  prometheus/rules/alerts.yml:644
-  alertmanager/alertmanager.yml.tmpl:644
   blackbox/blackbox.yml:644
   scripts/render-config.sh:755
   panel/server.py:644
+  panel/store.py:644
+  panel/auth.py:644
+  panel/dockerapi.py:644
+  panel/monitor.py:644
+  panel/icons.py:644
   panel/static/index.html:644
   panel/static/login.html:644
   panel/static/app.js:644
@@ -23,8 +26,6 @@ FILES=(
   panel/static/style.css:644
   panel/static/favicon.svg:644
 )
-# Targets are only written on first install so user edits survive re-runs.
-FIRST_ONLY=(prometheus/targets/http.yml:644 prometheus/targets/tcp.yml:644 prometheus/targets/nodes.yml:644)
 
 # cat that guarantees a trailing newline, so the heredoc delimiter always starts its own line.
 cat_nl() { cat "$1"; [ -z "$(tail -c1 "$1")" ] || echo; }
@@ -42,12 +43,17 @@ emit() {  # emit <path:mode> <guard>
   fi
 }
 
-body=$(for f in "${FILES[@]}"; do emit "$f"; done; for f in "${FIRST_ONLY[@]}"; do emit "$f" first; done)
+# The embedded files together exceed the 128 KB limit for a single command-line argument,
+# so the body goes through a temporary file instead of argv.
+body_file=$(mktemp)
+trap 'rm -f "$body_file"' EXIT
+for f in "${FILES[@]}"; do emit "$f"; done > "$body_file"
 
-python3 - "$body" > install.sh <<'PY'
+python3 - "$body_file" > install.sh <<'PY'
 import sys
 t = open("scripts/installer.tmpl.sh").read()
-sys.stdout.write(t.replace("@@EMBEDDED@@", sys.argv[1].rstrip("\n")))
+body = open(sys.argv[1]).read().rstrip("\n")
+sys.stdout.write(t.replace("@@EMBEDDED@@", body))
 PY
 chmod +x install.sh
 bash -n install.sh

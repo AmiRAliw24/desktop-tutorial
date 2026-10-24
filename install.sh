@@ -171,6 +171,25 @@ services:
       - ./blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
     networks: [monitoring]
 
+  # Finds the server's public IPv4/IPv6 (shown on the overview page). Host networking so the
+  # lookups use the real interfaces; set PUBLIC_IP_LOOKUP=0 in .env to disable.
+  hostip:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    command: ["python", "-u", "/app/hostip.py"]
+    network_mode: host
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PUBLIC_IP_LOOKUP: ${PUBLIC_IP_LOOKUP:-1}
+      OUT: /data/public-ip.json
+    volumes:
+      - ./panel:/app:ro
+      - ./data/panel:/data
+
   panel:
     image: python:3.12-alpine
     restart: unless-stopped
@@ -241,6 +260,10 @@ TELEGRAM_CHAT_ID=123456789
 DOCKER_GID=999
 # Set to 0 to make the container list read-only.
 PANEL_DOCKER_CONTROL=1
+
+# Show the server's public IPv4/IPv6 on the overview page. This asks api.ipify.org (or icanhazip.com / ident.me)
+# for the address every 10 minutes; set to 0 to turn the lookups off.
+PUBLIC_IP_LOOKUP=1
 __MONITORING_EOF__
   write_file .gitignore 644 <<'__MONITORING_EOF__'
 .env
@@ -267,6 +290,8 @@ __MONITORING_EOF__
 تم تیره/روشن، فارسی و انگلیسی (با راست‌به‌چپ، فونت وزیرمتن داخلی)، کارت «وضعیت کلی» که مشکلات را خلاصه می‌کند، گیج‌های حلقه‌ای CPU/رم/دیسک با رنگ شدت، اسپارک‌لاین و نمودارهای تعاملی (با نمایش جدولی). کاملاً ریسپانسیو: دسکتاپ با سایدبار، تبلت با نوار آیکون، و گوشی با نوار تب پایین + منوی «بیشتر»، جدول‌ها به کارت و پنجره‌ها به باتم‌شیت تبدیل می‌شوند. صفحه‌ها:
 
 **مانیتورها:** نمای کلی، کانتینرها، سایت‌ها، دیسک‌ها، شبکه، تارگت‌ها، هشدارها.
+
+**آی‌پی عمومی:** در کارت وضعیت کلی، IPv4 و IPv6 عمومی سرور نمایش داده می‌شود (با کلیک کپی می‌شود). یک کانتینر کوچک `hostip` با شبکه‌ی خودِ سرور هر ۱۰ دقیقه آن را از `api.ipify.org` (و در صورت خطا `icanhazip.com` / `ident.me`) می‌پرسد. اگر سرور IPv6 ندارد «–» نشان داده می‌شود. برای خاموش کردن این پرس‌وجو `PUBLIC_IP_LOOKUP=0` را در `.env` بگذارید.
 
 **مدیریت (همه از پنل):**
 - **سایت‌ها:** افزودن/حذف سایت (HTTP/HTTPS) و پورت TCP برای چک آپتایم، زمان پاسخ و انقضای SSL. **رفع خودکار** (پیش‌فرض روشن): اگر سایتی که اضافه می‌کنید یا سایتی که ۵ دقیقه خراب بوده با چک استاندارد کار نکند، پنل خودش بهترین راه را پیدا و اعمال می‌کند: حالت TLS دیگر، یا صفحه‌ای که آدرس `http://` سایت به آن ریدایرکت می‌شود، یا خود `http://`. چکِ سالم هرگز تغییر نمی‌کند و سایتِ واقعاً خاموش دست‌نخورده می‌ماند. هر تغییر در بخش «Automatic adjustments» ثبت می‌شود و از تنظیمات قابل خاموش کردن است. دکمه‌ی ذره‌بین کنار هر ردیف چک را همان لحظه اجرا می‌کند و **دلیل ناموفق بودن** را به زبان ساده می‌گوید (قطع شدن handshake توسط سایت، پورت بسته، DNS، timeout، مشکل گواهی، کد خطای HTTP). برای سایتی که چک استاندارد را رد می‌کند، خودش حالت‌های دیگر (TLS قدیمی ۱.۰/۱.۱، نادیده گرفتن خطای گواهی، HTTP ساده، فقط اتصال TCP) را هم امتحان می‌کند و می‌گوید کدام کار می‌کند؛ با یک کلیک همان حالت برای مانیتور آن سایت فعال می‌شود (کنار آدرس برچسب حالت دیده می‌شود). اگر سایت فقط با HTTP ساده در دسترس باشد و HTTPS را برای این سرور رد کند، دکمه‌ی «مانیتور روی HTTP ساده» آدرس را (با حفظ نام) به `http://` تغییر می‌دهد.
@@ -2008,6 +2033,17 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 
 PROM = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090").rstrip("/")
+PUBLIC_IP_FILE = os.path.join(os.environ.get("DATA_DIR", "/data"), "public-ip.json")
+
+
+def public_ip():
+    """Written by the hostip container; {} until its first lookup has finished."""
+    try:
+        with open(PUBLIC_IP_FILE) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return {"v4": d.get("v4"), "v6": d.get("v6"), "disabled": bool(d.get("disabled")), "checked": d.get("checked")}
 
 
 def prom_get(path, params=None):
@@ -2093,6 +2129,7 @@ def api_overview(q):
             "cpu_model": cpuinfo.get("model_name", ""),
             "cores": scalar(f"count(count by (cpu) (node_cpu_seconds_total{{{n}}}))"),
         },
+        "public_ip": public_ip(),
         "cpu": scalar(f'100 - avg(rate(node_cpu_seconds_total{{{n},mode="idle"}}[2m])) * 100'),
         "mem": {"total": mem_total, "used": None if mem_total is None or mem_avail is None else mem_total - mem_avail},
         "swap": {"total": swap_total, "used": None if swap_total is None or swap_free is None else swap_total - swap_free},
@@ -2334,6 +2371,60 @@ def ico():
     entry = struct.pack("<BBBBHHII", 32, 32, 0, 0, 1, 32, len(data), 22)
     return header + entry + data
 __MONITORING_EOF__
+  write_file panel/hostip.py 644 <<'__MONITORING_EOF__'
+"""Finds this server's public IPv4 / IPv6 address for the dashboard.
+
+Runs in its own container with host networking, so the lookups leave through the server's real
+interfaces (a bridged container usually has no IPv6 route). The result is written to a small JSON
+file that the panel reads. Set PUBLIC_IP_LOOKUP=0 in .env to switch the lookups off.
+"""
+import ipaddress
+import json
+import os
+import time
+import urllib.request
+
+OUT = os.environ.get("OUT", "/data/public-ip.json")
+SOURCES = {
+    4: ["https://api4.ipify.org", "https://ipv4.icanhazip.com", "https://v4.ident.me"],
+    6: ["https://api6.ipify.org", "https://ipv6.icanhazip.com", "https://v6.ident.me"],
+}
+
+
+def lookup(version):
+    for url in SOURCES[version]:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "server-monitor"})
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                ip = ipaddress.ip_address(resp.read(100).decode().strip())
+            if ip.version == version and ip.is_global:
+                return str(ip)
+        except Exception:
+            continue
+    return None
+
+
+def write(data):
+    tmp = OUT + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    os.replace(tmp, OUT)
+
+
+def main():
+    if os.environ.get("PUBLIC_IP_LOOKUP", "1") == "0":
+        write({"disabled": True})
+        while True:
+            time.sleep(86400)
+    while True:
+        v4, v6 = lookup(4), lookup(6)
+        write({"v4": v4, "v6": v6, "checked": int(time.time())})
+        time.sleep(600 if (v4 or v6) else 60)
+
+
+if __name__ == "__main__":
+    main()
+__MONITORING_EOF__
   write_file panel/static/index.html 644 <<'__MONITORING_EOF__'
 <!doctype html>
 <html lang="en" data-theme="dark">
@@ -2478,7 +2569,7 @@ __MONITORING_EOF__
       h_ok: "Everything is healthy", h_ok_sub: "The server and all of your checks are working normally.", h_warn: "Needs your attention", h_bad: "Problems detected",
       i_alerts: "{n} active alert(s)", i_sites: "{n} website/port check(s) failing", i_targets: "{n} monitoring target(s) not responding",
       i_res: "{what} is high ({v}%)", i_pending: "{n} alert(s) about to fire", i_ssl: "an SSL certificate expires in {n} day(s)",
-      lv_ok: "Normal", lv_warn: "High", lv_bad: "Critical", more: "More", tbl_view: "Table view", time: "Time",
+      lv_ok: "Normal", lv_warn: "High", lv_bad: "Critical", address: "Address", more: "More", tbl_view: "Table view", time: "Time",
       err_api: "Cannot load data", last_update: "Last update", auto: "auto-refresh every 10s", ago: "ago",
       t_dark: "Switch to light theme", t_light: "Switch to dark theme",
       // generic UI
@@ -2604,7 +2695,7 @@ __MONITORING_EOF__
       h_ok: "همه چیز سالم است", h_ok_sub: "سرور و تمام بررسی‌های شما عادی کار می‌کنند.", h_warn: "نیاز به توجه دارد", h_bad: "مشکل شناسایی شد",
       i_alerts: "{n} هشدار فعال", i_sites: "{n} بررسی سایت/پورت ناموفق است", i_targets: "{n} هدف مانیتورینگ پاسخ نمی‌دهد",
       i_res: "{what} بالا است ({v}٪)", i_pending: "{n} هشدار در آستانه‌ی فعال شدن", i_ssl: "گواهی SSL تا {n} روز دیگر منقضی می‌شود",
-      lv_ok: "عادی", lv_warn: "بالا", lv_bad: "بحرانی", more: "بیشتر", tbl_view: "نمایش جدول", time: "زمان",
+      lv_ok: "عادی", lv_warn: "بالا", lv_bad: "بحرانی", address: "آدرس", more: "بیشتر", tbl_view: "نمایش جدول", time: "زمان",
       err_api: "داده‌ها بارگذاری نشد", last_update: "آخرین بروزرسانی", auto: "بروزرسانی خودکار هر ۱۰ ثانیه", ago: "پیش",
       t_dark: "تم روشن", t_light: "تم تیره",
       add: "افزودن", cancel: "انصراف", close: "بستن", save: "ذخیره", saved: "ذخیره شد", remove: "حذف", working: "در حال انجام…", copy: "کپی", copied: "کپی شد",
@@ -3016,7 +3107,13 @@ __MONITORING_EOF__
     const d = o.disk;
     const { sev, issues } = health(o, memPct);
     const tone = ["", "warn", "bad"][sev];
+    const ip = o.public_ip || {};
+    const local = !state.instance || state.instance === "node-exporter:9100";
+    const ipChip = (label, v, wait) => `<button type="button" class="chip copy${v ? "" : " off"}" ${v ? `data-copy="${esc(v)}" title="${esc(t("copy"))}"` : "disabled"}><b class="ipl">${label}</b>${num(esc(v || (wait ? "…" : "–")))}</button>`;
+    const addr = state.instance ? state.instance.replace(/:\d+$/, "") : "";
     const chips = [
+      local ? (ip.disabled ? "" : ipChip("IPv4", ip.v4, !ip.checked) + ipChip("IPv6", ip.v6, !ip.checked))
+        : addr ? ipChip(t("address"), addr, false) : "",
       o.host.name ? `<span class="chip">${icon("server")}<b>${num(esc(o.host.name))}</b></span>` : "",
       o.host.os ? `<span class="chip">${num(esc(o.host.os))}</span>` : "",
       o.host.cores != null ? `<span class="chip">${icon("cpu")}<b>${num(nf(o.host.cores, 0))}</b> ${esc(t("cores"))}</span>` : "",
@@ -3742,6 +3839,8 @@ __MONITORING_EOF__
     const go = e.target.closest("[data-go]");
     if (go) { location.hash = go.dataset.go; return; }
     if (e.target.closest("[data-more]")) { moreSheet(); return; }
+    const cp = e.target.closest("[data-copy]");
+    if (cp) { copyText(cp.dataset.copy); return; }
     const tv = e.target.closest("[data-tv]");
     if (tv) {
       const i = +tv.dataset.tv;
@@ -4398,6 +4497,12 @@ dialog.sheet::backdrop { background: rgba(3, 7, 12, .6); backdrop-filter: blur(4
 .gauge .spark { grid-column: 1 / -1; }
 #banner:empty { display: none; }
 .gauge { align-content: center; }
+
+/* public IP chips (click to copy) */
+button.chip { font: inherit; cursor: pointer; color: var(--muted); text-align: start; overflow-wrap: anywhere; transition: border-color .15s, background .15s; }
+button.chip:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+button.chip:disabled { cursor: default; opacity: .6; }
+.chip .ipl { font-size: 10.5px; letter-spacing: .08em; color: var(--accent); background: var(--accent-soft); padding: 0 6px; border-radius: 6px; line-height: 1.7; }
 __MONITORING_EOF__
   write_file panel/static/fonts.css 644 <<'__MONITORING_EOF__'
 /* Vazirmatn (SIL Open Font License 1.1) - Latin + Persian/Arabic subset, embedded so the panel needs no external font host. */

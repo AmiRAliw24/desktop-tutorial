@@ -596,3 +596,9 @@ dialog.sheet::backdrop { background: rgba(3, 7, 12, .6); backdrop-filter: blur(4
 .gauge .spark { grid-column: 1 / -1; }
 #banner:empty { display: none; }
 .gauge { align-content: center; }
+
+/* public IP chips (click to copy) */
+button.chip { font: inherit; cursor: pointer; color: var(--muted); text-align: start; overflow-wrap: anywhere; transition: border-color .15s, background .15s; }
+button.chip:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+button.chip:disabled { cursor: default; opacity: .6; }
+.chip .ipl { font-size: 10.5px; letter-spacing: .08em; color: var(--accent); background: var(--accent-soft); padding: 0 6px; border-radius: 6px; line-height: 1.7; }

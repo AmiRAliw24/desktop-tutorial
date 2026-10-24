@@ -38,7 +38,7 @@
       h_ok: "Everything is healthy", h_ok_sub: "The server and all of your checks are working normally.", h_warn: "Needs your attention", h_bad: "Problems detected",
       i_alerts: "{n} active alert(s)", i_sites: "{n} website/port check(s) failing", i_targets: "{n} monitoring target(s) not responding",
       i_res: "{what} is high ({v}%)", i_pending: "{n} alert(s) about to fire", i_ssl: "an SSL certificate expires in {n} day(s)",
-      lv_ok: "Normal", lv_warn: "High", lv_bad: "Critical", more: "More", tbl_view: "Table view", time: "Time",
+      lv_ok: "Normal", lv_warn: "High", lv_bad: "Critical", address: "Address", more: "More", tbl_view: "Table view", time: "Time",
       err_api: "Cannot load data", last_update: "Last update", auto: "auto-refresh every 10s", ago: "ago",
       t_dark: "Switch to light theme", t_light: "Switch to dark theme",
       // generic UI
@@ -164,7 +164,7 @@
       h_ok: "همه چیز سالم است", h_ok_sub: "سرور و تمام بررسی‌های شما عادی کار می‌کنند.", h_warn: "نیاز به توجه دارد", h_bad: "مشکل شناسایی شد",
       i_alerts: "{n} هشدار فعال", i_sites: "{n} بررسی سایت/پورت ناموفق است", i_targets: "{n} هدف مانیتورینگ پاسخ نمی‌دهد",
       i_res: "{what} بالا است ({v}٪)", i_pending: "{n} هشدار در آستانه‌ی فعال شدن", i_ssl: "گواهی SSL تا {n} روز دیگر منقضی می‌شود",
-      lv_ok: "عادی", lv_warn: "بالا", lv_bad: "بحرانی", more: "بیشتر", tbl_view: "نمایش جدول", time: "زمان",
+      lv_ok: "عادی", lv_warn: "بالا", lv_bad: "بحرانی", address: "آدرس", more: "بیشتر", tbl_view: "نمایش جدول", time: "زمان",
       err_api: "داده‌ها بارگذاری نشد", last_update: "آخرین بروزرسانی", auto: "بروزرسانی خودکار هر ۱۰ ثانیه", ago: "پیش",
       t_dark: "تم روشن", t_light: "تم تیره",
       add: "افزودن", cancel: "انصراف", close: "بستن", save: "ذخیره", saved: "ذخیره شد", remove: "حذف", working: "در حال انجام…", copy: "کپی", copied: "کپی شد",
@@ -576,7 +576,13 @@
     const d = o.disk;
     const { sev, issues } = health(o, memPct);
     const tone = ["", "warn", "bad"][sev];
+    const ip = o.public_ip || {};
+    const local = !state.instance || state.instance === "node-exporter:9100";
+    const ipChip = (label, v, wait) => `<button type="button" class="chip copy${v ? "" : " off"}" ${v ? `data-copy="${esc(v)}" title="${esc(t("copy"))}"` : "disabled"}><b class="ipl">${label}</b>${num(esc(v || (wait ? "…" : "–")))}</button>`;
+    const addr = state.instance ? state.instance.replace(/:\d+$/, "") : "";
     const chips = [
+      local ? (ip.disabled ? "" : ipChip("IPv4", ip.v4, !ip.checked) + ipChip("IPv6", ip.v6, !ip.checked))
+        : addr ? ipChip(t("address"), addr, false) : "",
       o.host.name ? `<span class="chip">${icon("server")}<b>${num(esc(o.host.name))}</b></span>` : "",
       o.host.os ? `<span class="chip">${num(esc(o.host.os))}</span>` : "",
       o.host.cores != null ? `<span class="chip">${icon("cpu")}<b>${num(nf(o.host.cores, 0))}</b> ${esc(t("cores"))}</span>` : "",
@@ -1302,6 +1308,8 @@
     const go = e.target.closest("[data-go]");
     if (go) { location.hash = go.dataset.go; return; }
     if (e.target.closest("[data-more]")) { moreSheet(); return; }
+    const cp = e.target.closest("[data-copy]");
+    if (cp) { copyText(cp.dataset.copy); return; }
     const tv = e.target.closest("[data-tv]");
     if (tv) {
       const i = +tv.dataset.tv;

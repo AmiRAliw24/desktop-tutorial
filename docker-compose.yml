@@ -93,6 +93,25 @@ services:
       - ./blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
     networks: [monitoring]
 
+  # Finds the server's public IPv4/IPv6 (shown on the overview page). Host networking so the
+  # lookups use the real interfaces; set PUBLIC_IP_LOOKUP=0 in .env to disable.
+  hostip:
+    image: python:3.12-alpine
+    restart: unless-stopped
+    command: ["python", "-u", "/app/hostip.py"]
+    network_mode: host
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PUBLIC_IP_LOOKUP: ${PUBLIC_IP_LOOKUP:-1}
+      OUT: /data/public-ip.json
+    volumes:
+      - ./panel:/app:ro
+      - ./data/panel:/data
+
   panel:
     image: python:3.12-alpine
     restart: unless-stopped

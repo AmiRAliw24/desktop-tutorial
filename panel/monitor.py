@@ -8,6 +8,17 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 
 PROM = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090").rstrip("/")
+PUBLIC_IP_FILE = os.path.join(os.environ.get("DATA_DIR", "/data"), "public-ip.json")
+
+
+def public_ip():
+    """Written by the hostip container; {} until its first lookup has finished."""
+    try:
+        with open(PUBLIC_IP_FILE) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return {"v4": d.get("v4"), "v6": d.get("v6"), "disabled": bool(d.get("disabled")), "checked": d.get("checked")}
 
 
 def prom_get(path, params=None):
@@ -93,6 +104,7 @@ def api_overview(q):
             "cpu_model": cpuinfo.get("model_name", ""),
             "cores": scalar(f"count(count by (cpu) (node_cpu_seconds_total{{{n}}}))"),
         },
+        "public_ip": public_ip(),
         "cpu": scalar(f'100 - avg(rate(node_cpu_seconds_total{{{n},mode="idle"}}[2m])) * 100'),
         "mem": {"total": mem_total, "used": None if mem_total is None or mem_avail is None else mem_total - mem_avail},
         "swap": {"total": swap_total, "used": None if swap_total is None or swap_free is None else swap_total - swap_free},

@@ -19,6 +19,7 @@ FILES=(
   panel/dockerapi.py:644
   panel/monitor.py:644
   panel/icons.py:644
+  panel/hostip.py:644
   panel/static/index.html:644
   panel/static/login.html:644
   panel/static/app.js:644
